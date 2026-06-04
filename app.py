@@ -80,82 +80,63 @@ with st.sidebar:
 
         st.divider()
 
-        # ── Sheets / Buffers with per-row ε' and σ toggles ──────────────────
+        # ── Sheets with 2-toggle layout (ε' | σ) ────────────────────────────
         st.markdown("**Sheets / Buffers**")
 
-        # Header row
-        hc0, hc1, hc2, hc3 = st.columns([3.2, 0.9, 0.9, 0.9])
-        hc1.markdown("<div style='text-align:center;font-size:11px;font-weight:600'>Show</div>", unsafe_allow_html=True)
-        hc2.markdown("<div style='text-align:center;font-size:11px;color:#1f77b4;font-weight:600'>ε'</div>", unsafe_allow_html=True)
-        hc3.markdown("<div style='text-align:center;font-size:11px;color:#d62728;font-weight:600'>σ</div>", unsafe_allow_html=True)
+        hc0, hc1, hc2 = st.columns([3.8, 0.9, 0.9])
+        hc1.markdown("<div style='text-align:center;font-size:11px;color:#1f77b4;font-weight:600'>ε'</div>", unsafe_allow_html=True)
+        hc2.markdown("<div style='text-align:center;font-size:11px;color:#d62728;font-weight:600'>σ</div>", unsafe_allow_html=True)
 
-        selected_keys  = []
-        show_eps_map   = {}   # key -> bool
-        show_sigma_map = {}   # key -> bool
+        show_eps_map   = {}
+        show_sigma_map = {}
 
         for k in sheet_keys:
             idx   = sheet_keys.index(k)
             color = COLORS[idx % len(COLORS)]
             name  = sheets[k]["name"]
-
-            c0, c1, c2, c3 = st.columns([3.2, 0.9, 0.9, 0.9])
+            c0, c1, c2 = st.columns([3.8, 0.9, 0.9])
             with c0:
-                # colour dot + label
                 st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:6px;font-size:12px'>"
+                    f"<div style='display:flex;align-items:center;gap:6px;font-size:12px;padding-top:6px'>"
                     f"<span style='display:inline-block;width:10px;height:10px;"
                     f"border-radius:50%;background:{color};flex-shrink:0'></span>"
                     f"{k}: {name}</div>",
                     unsafe_allow_html=True)
             with c1:
-                show = st.checkbox("", value=False, key=f"cb_{k}",
-                                   label_visibility="collapsed")
+                show_eps_map[k] = st.checkbox("", value=False, key=f"eps_{k}",
+                                              label_visibility="collapsed")
             with c2:
-                eps_on = st.checkbox("", value=True, key=f"eps_{k}",
-                                     label_visibility="collapsed",
-                                     disabled=not show)
-            with c3:
-                sig_on = st.checkbox("", value=True, key=f"sig_{k}",
-                                     label_visibility="collapsed",
-                                     disabled=not show)
-            if show:
-                selected_keys.append(k)
-            show_eps_map[k]   = show and eps_on
-            show_sigma_map[k] = show and sig_on
+                show_sigma_map[k] = st.checkbox("", value=False, key=f"sig_{k}",
+                                                label_visibility="collapsed")
+
+        # a buffer is "selected" if either toggle is on
+        selected_keys = [k for k in sheet_keys
+                         if show_eps_map.get(k) or show_sigma_map.get(k)]
 
         st.divider()
 
         # ── Legend names + order ─────────────────────────────────────────────
         st.markdown("**Legend Names & Order**")
-        st.caption("Edit names · drag the ↕ number to reorder")
-
-        # initialise order list in session state
-        if "legend_order" not in st.session_state or \
-                set(st.session_state.legend_order) != set(sheet_keys):
-            st.session_state.legend_order = sheet_keys[:]
+        st.caption("Edit names · set order (1 = top of legend)")
 
         legend_names = {}
-        new_order    = []
-
         for k in sheet_keys:
             legend_names[k] = st.text_input(
                 k, value=sheets[k]["name"],
                 key=f"leg_{k}", label_visibility="collapsed")
 
-        st.markdown("**Plot order** (1 = first in legend)")
+        st.markdown("**Plot order**")
         order_inputs = {}
         ocols = st.columns(2)
         for i, k in enumerate(sheet_keys):
-            name  = legend_names.get(k, k)
-            col   = ocols[i % 2]
-            order_inputs[k] = col.number_input(
-                name[:18], min_value=1, max_value=len(sheet_keys),
+            order_inputs[k] = ocols[i % 2].number_input(
+                legend_names.get(k, k)[:18],
+                min_value=1, max_value=len(sheet_keys),
                 value=i + 1, step=1, key=f"ord_{k}")
 
-        # resolve order (sort by number, ties keep original order)
-        sorted_keys = sorted(sheet_keys, key=lambda k: (order_inputs[k], sheet_keys.index(k)))
-        # apply order only to selected keys
-        selected_keys = [k for k in sorted_keys if k in selected_keys]
+        selected_keys = [k for k in
+                         sorted(sheet_keys, key=lambda k: (order_inputs[k], sheet_keys.index(k)))
+                         if k in selected_keys]
 
         st.divider()
 
@@ -186,13 +167,13 @@ with st.sidebar:
             y2max = st.text_input("σ Max (S/m)",    value="auto", key="y2max")
 
     else:
-        sheets = {}
-        sheet_keys = []
-        selected_keys = []
-        legend_names  = {}
-        marker_freqs  = []
-        show_eps_map  = {}
-        show_sigma_map= {}
+        sheets         = {}
+        sheet_keys     = []
+        selected_keys  = []
+        legend_names   = {}
+        marker_freqs   = []
+        show_eps_map   = {}
+        show_sigma_map = {}
 
 # ── Main plot ─────────────────────────────────────────────────────────────────
 
@@ -203,8 +184,15 @@ if not uploaded:
     st.stop()
 
 if not selected_keys:
-    st.warning("Select at least one buffer in the sidebar to plot.")
+    st.warning("Select at least one ε' or σ toggle in the sidebar to plot.")
     st.stop()
+
+x_lo  = parse_lim(xmin);  x_hi  = parse_lim(xmax)
+y1_lo = parse_lim(y1min); y1_hi = parse_lim(y1max)
+y2_lo = parse_lim(y2min); y2_hi = parse_lim(y2max)
+
+any_eps   = any(show_eps_map.get(k)   for k in selected_keys)
+any_sigma = any(show_sigma_map.get(k) for k in selected_keys)
 
 fig = go.Figure()
 marker_table_rows = []
@@ -224,7 +212,7 @@ for k in selected_keys:
             name=f"{name} ε'",
             line=dict(color=color, width=2, dash="solid"),
             mode="lines", yaxis="y1",
-            hovertemplate=(f"<b>{name} — ε'</b><br>Freq: %{{x:.1f}} MHz<br>ε': %{{y:.4f}}<extra></extra>")
+            hovertemplate=f"<b>{name} — ε'</b><br>Freq: %{{x:.1f}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
         ))
 
     if show_sigma_map.get(k):
@@ -233,7 +221,7 @@ for k in selected_keys:
             name=f"{name} σ",
             line=dict(color=color, width=2, dash="dash"),
             mode="lines", yaxis="y2",
-            hovertemplate=(f"<b>{name} — σ</b><br>Freq: %{{x:.1f}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>")
+            hovertemplate=f"<b>{name} — σ</b><br>Freq: %{{x:.1f}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
         ))
 
     if marker_freqs:
@@ -247,16 +235,16 @@ for k in selected_keys:
                 fig.add_trace(go.Scatter(
                     x=valid_mf, y=ep_vals, mode="markers",
                     marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
-                    name=f"{name} markers ε'", yaxis="y1", showlegend=False,
-                    hovertemplate=(f"<b>{name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>")
+                    yaxis="y1", showlegend=False,
+                    hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
                 ))
             if show_sigma_map.get(k):
                 fig.add_trace(go.Scatter(
                     x=valid_mf, y=sg_vals, mode="markers",
                     marker=dict(color=color, size=8, symbol="diamond",
                                 line=dict(color="#e65100", width=2)),
-                    name=f"{name} markers σ", yaxis="y2", showlegend=False,
-                    hovertemplate=(f"<b>{name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>")
+                    yaxis="y2", showlegend=False,
+                    hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                 ))
             for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
                 marker_table_rows.append({
@@ -264,9 +252,19 @@ for k in selected_keys:
                     "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
                 })
 
-x_lo  = parse_lim(xmin);  x_hi  = parse_lim(xmax)
-y1_lo = parse_lim(y1min); y1_hi = parse_lim(y1max)
-y2_lo = parse_lim(y2min); y2_hi = parse_lim(y2max)
+# When only σ is shown, plot a dummy invisible ε' trace so the left axis
+# exists and the grid renders correctly
+if not any_eps and any_sigma:
+    # grab any selected sheet's freq range for dummy
+    k0  = selected_keys[0]
+    df0 = sheets[k0]["df"]
+    fig.add_trace(go.Scatter(
+        x=df0["f (MHz)"].values,
+        y=[None] * len(df0),
+        yaxis="y1", showlegend=False,
+        hoverinfo="skip",
+        line=dict(width=0)
+    ))
 
 fig.update_layout(
     template="plotly_white",
@@ -282,44 +280,55 @@ fig.update_layout(
         showgrid=True, gridcolor="#e0e0e0",
     ),
     yaxis=dict(
-        title="Permittivity (ε')", side="left",
+        title="Permittivity (ε')" if any_eps else "",
+        side="left",
         range=[y1_lo, y1_hi] if (y1_lo is not None and y1_hi is not None) else None,
         showgrid=True, gridcolor="#e0e0e0",
+        showticklabels=any_eps,
     ),
     yaxis2=dict(
-        title="Conductivity σ (S/m)", overlaying="y", side="right",
+        title="Conductivity σ (S/m)" if any_sigma else "",
+        overlaying="y", side="right",
         range=[y2_lo, y2_hi] if (y2_lo is not None and y2_hi is not None) else None,
         showgrid=False,
+        showticklabels=any_sigma,
     ),
     plot_bgcolor="white", paper_bgcolor="white",
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Export PNG ────────────────────────────────────────────────────────────────
+# ── Export PNG (matplotlib, matches exactly what's plotted) ───────────────────
 
-def build_export_png(selected_keys, sheets, legend_names, show_eps_map, show_sigma_map,
-                     marker_freqs, x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi):
+def build_export_png(selected_keys, sheets, sheet_keys, legend_names,
+                     show_eps_map, show_sigma_map, marker_freqs,
+                     any_eps, any_sigma,
+                     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi):
     fig_ex, ax1_ex = plt.subplots(figsize=(12, 6), facecolor="white")
-    fig_ex.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.10)
+    fig_ex.subplots_adjust(left=0.09, right=0.88, top=0.92, bottom=0.10)
     ax2_ex = ax1_ex.twinx()
+
     for ax in [ax1_ex, ax2_ex]:
         ax.set_facecolor("white")
-        ax.tick_params(labelsize=8)
-        for spine in ax.spines.values():
-            spine.set_edgecolor("#cccccc")
+        ax.tick_params(labelsize=9)
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#cccccc")
+
     ax1_ex.grid(True, color="#e0e0e0", linewidth=0.6, linestyle="--")
     ax1_ex.set_xlabel("Frequency (MHz)", fontsize=10)
-    ax1_ex.set_ylabel("Permittivity (ε')", fontsize=10)
+    ax1_ex.set_ylabel("Permittivity (ε')" if any_eps else "", fontsize=10)
+    if not any_eps:
+        ax1_ex.set_yticks([])
     ax2_ex.yaxis.set_label_position("right")
     ax2_ex.yaxis.tick_right()
-    ax2_ex.set_ylabel("Conductivity σ (S/m)", fontsize=10)
+    ax2_ex.set_ylabel("Conductivity σ (S/m)" if any_sigma else "", fontsize=10)
+    if not any_sigma:
+        ax2_ex.set_yticks([])
     ax1_ex.set_title("DAK-12 Dielectric Measurements", fontsize=12, fontweight="bold", pad=8)
-    colors = COLORS
-    sk = list(sheets.keys())
+
     handles = []
     for k in selected_keys:
-        color = colors[sk.index(k) % len(colors)]
+        color = COLORS[sheet_keys.index(k) % len(COLORS)]
         df    = sheets[k]["df"]
         freq  = df["f (MHz)"].values
         name  = legend_names.get(k, k)
@@ -327,7 +336,7 @@ def build_export_png(selected_keys, sheets, legend_names, show_eps_map, show_sig
             ax1_ex.plot(freq, df["ε'"].values, color=color, linewidth=1.8)
             handles.append(Line2D([0],[0], color=color, lw=2, label=f"{name} ε'"))
         if show_sigma_map.get(k):
-            ax2_ex.plot(freq, df["σ (S/m)"].values, color=color, linewidth=1.8, linestyle="--")
+            ax2_ex.plot(freq, df["σ (S/m)"].values, color=color, lw=1.8, linestyle="--")
             handles.append(Line2D([0],[0], color=color, lw=2, linestyle="--", label=f"{name} σ"))
         if marker_freqs:
             f_e = interp1d(freq, df["ε'"].values,      kind="cubic", fill_value="extrapolate")
@@ -342,11 +351,13 @@ def build_export_png(selected_keys, sheets, legend_names, show_eps_map, show_sig
                         ax2_ex.plot(mf, float(f_s(mf)), "D", color=color,
                                     markeredgecolor="#e65100", markeredgewidth=1.5,
                                     markersize=6, zorder=6)
+
     if x_lo  is not None and x_hi  is not None: ax1_ex.set_xlim(x_lo,  x_hi)
     if y1_lo is not None and y1_hi is not None: ax1_ex.set_ylim(y1_lo, y1_hi)
     if y2_lo is not None and y2_hi is not None: ax2_ex.set_ylim(y2_lo, y2_hi)
-    ax1_ex.legend(handles=handles, loc="upper right", fontsize=7.5,
-                  framealpha=0.85, facecolor="white", edgecolor="#cccccc")
+    if handles:
+        ax1_ex.legend(handles=handles, loc="upper right", fontsize=8,
+                      framealpha=0.9, facecolor="white", edgecolor="#cccccc")
     buf = _io.BytesIO()
     fig_ex.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig_ex)
@@ -354,8 +365,10 @@ def build_export_png(selected_keys, sheets, legend_names, show_eps_map, show_sig
     return buf.read()
 
 png_bytes = build_export_png(
-    selected_keys, sheets, legend_names, show_eps_map, show_sigma_map,
-    marker_freqs, x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi)
+    selected_keys, sheets, sheet_keys, legend_names,
+    show_eps_map, show_sigma_map, marker_freqs,
+    any_eps, any_sigma,
+    x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi)
 st.download_button("💾 Export Plot as PNG", data=png_bytes,
                    file_name="dak12_plot.png", mime="image/png")
 
