@@ -254,14 +254,75 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Export button ─────────────────────────────────────────────────────────────
+# ── Export button (matplotlib re-render, no kaleido needed) ──────────────────
 
-try:
-    img_bytes = fig.to_image(format="png", width=1400, height=700, scale=2)
-    st.download_button("💾 Export Plot as PNG", data=img_bytes,
-                       file_name="dak12_plot.png", mime="image/png")
-except Exception:
-    st.info("Install `kaleido` for PNG export: `pip install kaleido`")
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import io as _io
+
+def build_export_png(selected_keys, sheets, legend_names, marker_freqs,
+                     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi):
+    fig_ex, ax1_ex = plt.subplots(figsize=(12, 6), facecolor="white")
+    fig_ex.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.10)
+    ax2_ex = ax1_ex.twinx()
+    for ax in [ax1_ex, ax2_ex]:
+        ax.set_facecolor("white")
+        ax.tick_params(labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#cccccc")
+    ax1_ex.grid(True, color="#e0e0e0", linewidth=0.6, linestyle="--")
+    ax1_ex.set_xlabel("Frequency (MHz)", fontsize=10)
+    ax1_ex.set_ylabel("Permittivity (ε')", fontsize=10)
+    ax2_ex.yaxis.set_label_position("right")
+    ax2_ex.yaxis.tick_right()
+    ax2_ex.set_ylabel("Conductivity σ (S/m)", fontsize=10)
+    ax1_ex.set_title("DAK-12 Dielectric Measurements", fontsize=12, fontweight="bold", pad=8)
+
+    colors = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+              "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"]
+    sheet_keys = list(sheets.keys())
+    handles = []
+    for k in selected_keys:
+        idx   = sheet_keys.index(k)
+        color = colors[idx % len(colors)]
+        df    = sheets[k]["df"]
+        freq  = df["f (MHz)"].values
+        eps   = df["ε'"].values
+        sigma = df["σ (S/m)"].values
+        name  = legend_names.get(k, k)
+        ax1_ex.plot(freq, eps,   color=color, linewidth=1.8)
+        ax2_ex.plot(freq, sigma, color=color, linewidth=1.8, linestyle="--")
+        handles.append(Line2D([0],[0], color=color, lw=2, label=f"{name} ε'"))
+        handles.append(Line2D([0],[0], color=color, lw=2, linestyle="--", label=f"{name} σ"))
+        if marker_freqs:
+            f_eps   = interp1d(freq, eps,   kind="cubic", fill_value="extrapolate")
+            f_sigma = interp1d(freq, sigma, kind="cubic", fill_value="extrapolate")
+            for mf in marker_freqs:
+                if freq.min() <= mf <= freq.max():
+                    ax1_ex.plot(mf, float(f_eps(mf)),   "o", color=color,
+                                markeredgecolor="#e65100", markeredgewidth=1.5, markersize=7, zorder=6)
+                    ax2_ex.plot(mf, float(f_sigma(mf)), "D", color=color,
+                                markeredgecolor="#e65100", markeredgewidth=1.5, markersize=6, zorder=6)
+    if x_lo is not None and x_hi is not None:
+        ax1_ex.set_xlim(x_lo, x_hi)
+    if y1_lo is not None and y1_hi is not None:
+        ax1_ex.set_ylim(y1_lo, y1_hi)
+    if y2_lo is not None and y2_hi is not None:
+        ax2_ex.set_ylim(y2_lo, y2_hi)
+    ax1_ex.legend(handles=handles, loc="upper right", fontsize=7.5,
+                  framealpha=0.85, facecolor="white", edgecolor="#cccccc")
+    buf = _io.BytesIO()
+    fig_ex.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor="white")
+    plt.close(fig_ex)
+    buf.seek(0)
+    return buf.read()
+
+png_bytes = build_export_png(selected_keys, sheets, legend_names, marker_freqs,
+                              x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi)
+st.download_button("💾 Export Plot as PNG", data=png_bytes,
+                   file_name="dak12_plot.png", mime="image/png")
 
 # ── Marker table ──────────────────────────────────────────────────────────────
 
