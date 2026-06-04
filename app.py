@@ -378,3 +378,5 @@ if marker_table_rows:
     st.divider()
     st.markdown("**Interpolated Values at Marked Frequencies**")
     st.dataframe(pd.DataFrame(marker_table_rows), use_container_width=True, hide_index=True)
+
+
