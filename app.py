@@ -168,24 +168,46 @@ with st.sidebar:
 
         # ── Legend names + order ─────────────────────────────────────────────
         st.markdown("**Legend Names & Order**")
+
+        # initialise order list in session state
+        if "legend_order" not in st.session_state or                 set(st.session_state["legend_order"]) != set(sheet_keys):
+            st.session_state["legend_order"] = list(sheet_keys)
+
+        def move_up(k):
+            order = st.session_state["legend_order"]
+            i = order.index(k)
+            if i > 0:
+                order[i], order[i-1] = order[i-1], order[i]
+
+        def move_down(k):
+            order = st.session_state["legend_order"]
+            i = order.index(k)
+            if i < len(order) - 1:
+                order[i], order[i+1] = order[i+1], order[i]
+
         legend_names = {}
+        for k in st.session_state["legend_order"]:
+            row = st.columns([3.2, 0.45, 0.45])
+            with row[0]:
+                legend_names[k] = st.text_input(
+                    k, value=sheets[k]["name"],
+                    key=f"leg_{k}", label_visibility="collapsed")
+            with row[1]:
+                st.button("▲", key=f"up_{k}",
+                          on_click=move_up, args=(k,),
+                          use_container_width=True)
+            with row[2]:
+                st.button("▼", key=f"dn_{k}",
+                          on_click=move_down, args=(k,),
+                          use_container_width=True)
+
+        # fill in any names not yet shown (unselected sheets)
         for k in sheet_keys:
-            legend_names[k] = st.text_input(
-                k, value=sheets[k]["name"],
-                key=f"leg_{k}", label_visibility="collapsed")
+            if k not in legend_names:
+                legend_names[k] = sheets[k]["name"]
 
-        st.markdown("**Plot order** (1 = top)")
-        order_inputs = {}
-        ocols = st.columns(2)
-        for i, k in enumerate(sheet_keys):
-            order_inputs[k] = ocols[i % 2].number_input(
-                legend_names.get(k, k)[:16],
-                min_value=1, max_value=len(sheet_keys),
-                value=i + 1, step=1, key=f"ord_{k}")
-
-        selected_keys = [k for k in
-                         sorted(sheet_keys, key=lambda k: (order_inputs[k], sheet_keys.index(k)))
-                         if k in selected_keys]
+        ordered_keys = st.session_state["legend_order"]
+        selected_keys = [k for k in ordered_keys if k in selected_keys]
 
         st.divider()
 
