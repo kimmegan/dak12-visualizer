@@ -124,6 +124,19 @@ with st.sidebar:
         show_eps_map   = {}
         show_sigma_map = {}
 
+        # init session state
+        for k in sheet_keys:
+            for suffix in ["all", "eps", "sig"]:
+                if f"{suffix}_{k}" not in st.session_state:
+                    st.session_state[f"{suffix}_{k}"] = False
+
+        def make_master_cb(k):
+            def _cb():
+                v = st.session_state[f"all_{k}"]
+                st.session_state[f"eps_{k}"] = v
+                st.session_state[f"sig_{k}"] = v
+            return _cb
+
         for k in sheet_keys:
             idx   = sheet_keys.index(k)
             color = COLORS[idx % len(COLORS)]
@@ -138,14 +151,14 @@ with st.sidebar:
                     f"{k}: {name}</div>",
                     unsafe_allow_html=True)
             with c1:
-                # master toggle — mirrors both ε' and σ
-                master = st.checkbox("", value=False, key=f"all_{k}",
-                                     label_visibility="collapsed")
+                st.checkbox("", key=f"all_{k}",
+                            on_change=make_master_cb(k),
+                            label_visibility="collapsed")
             with c2:
-                show_eps_map[k] = st.checkbox("", value=master, key=f"eps_{k}",
+                show_eps_map[k] = st.checkbox("", key=f"eps_{k}",
                                               label_visibility="collapsed")
             with c3:
-                show_sigma_map[k] = st.checkbox("", value=master, key=f"sig_{k}",
+                show_sigma_map[k] = st.checkbox("", key=f"sig_{k}",
                                                 label_visibility="collapsed")
 
         selected_keys = [k for k in sheet_keys
@@ -356,7 +369,7 @@ fig.update_layout(
         showgrid=True, gridcolor="#e0e0e0",
     ),
     yaxis=dict(
-        title="Permittivity (ε')" if any_eps else "",
+        title="Permittivity ε'" if any_eps else "",
         side="left",
         range=[y1_lo, y1_hi] if (y1_lo is not None and y1_hi is not None) else None,
         showgrid=True, gridcolor="#e0e0e0",
@@ -391,7 +404,7 @@ def build_export_png(selected_keys, sheets, sheet_keys, legend_names,
             sp.set_edgecolor("#cccccc")
     ax1_ex.grid(True, color="#e0e0e0", linewidth=0.6, linestyle="--")
     ax1_ex.set_xlabel("Frequency (MHz)", fontsize=10)
-    ax1_ex.set_ylabel("Permittivity (ε')" if any_eps else "", fontsize=10)
+    ax1_ex.set_ylabel("Permittivity ε'" if any_eps else "", fontsize=10)
     if not any_eps:
         ax1_ex.set_yticks([])
     ax2_ex.yaxis.set_label_position("right")
