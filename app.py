@@ -491,7 +491,7 @@ png_bytes = build_export_png(
     any_eps, any_sigma, plot_title,
     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi)
 st.download_button("💾 Export Plot as PNG", data=png_bytes,
-                   file_name="dak12_plot.png", mime="image/png")
+                   file_name=plot_title+".png", mime="image/png")
 
 # ── Marker table ──────────────────────────────────────────────────────────────
 
