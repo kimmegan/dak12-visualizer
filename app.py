@@ -22,8 +22,8 @@ h1 { font-size: 1.6rem !important; }
 div[data-testid="column"] { padding: 0 4px; }
 .info-btn-container {
     position: fixed;
-    top: 10px;
-    right: 20px;
+    top: 20px;
+    right: 30px;
     z-index: 999;
 }
 </style>
@@ -337,15 +337,8 @@ with st.sidebar:
     # Grouping system
     st.markdown("**Replicate Groups**")
     
-    col_group_btn, col_group_info = st.columns([1, 1])
-    
-    with col_group_btn:
-        if st.button("➕ New Group", use_container_width=True):
-            st.session_state.show_grouping_modal = True
-    
-    with col_group_info:
-        if st.button("ℹ️ Help", use_container_width=True):
-            st.session_state.show_info_modal = True
+    if st.button("➕ New Group", use_container_width=True):
+        st.session_state.show_grouping_modal = True
     
     if st.session_state.groupings:
         st.caption("Groups:")
@@ -411,23 +404,37 @@ with st.sidebar:
     
     # Info modal
     if st.session_state.show_info_modal:
-        st.markdown("**Help**")
-        st.markdown("""
-**Select All**: Toggle all ε' or σ for a file
+        with st.expander("ℹ️ Help & Information", expanded=True):
+            st.markdown("""
+**Select All Buttons**
+- Toggle all ε' or σ for a single file
 
-**Replicate Groups**: Create groups to average subsets
-- "Buffer 1 replicates" (3 sheets) → 1 mean line
-- Grouped sheets don't appear individually
+**Replicate Groups**
+- Create groups to average specific subsets of sheets
+- Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
+- Grouped sheets don't appear individually on the plot
 
-**Error Bands (±SD)**: Shaded region shows ±1 std dev
-- Only shown when using groups or global averaging
+**Average & Error Bands**
+- Global toggle: average ALL selected sheets
+- Shows ±1 standard deviation as shaded region
 
-**Legend**: Customize names and reorder
+**Error Bands (±SD)**
+- Auto-shown for replicate groups
+- Shows uncertainty in the averaged data
 
-**Frequency Markers**: Interpolate values at specific frequencies
-        """)
+**Legend**
+- Customize names and reorder traces
+- Use ▲ and ▼ buttons
+
+**Frequency Markers**
+- Enter comma-separated frequencies to interpolate values
+- Results shown in table below plot
+
+**File Info**
+- Shows last modified time in file header
+            """)
         
-        if st.button("Close", use_container_width=True):
+        if st.button("Close Help", use_container_width=True):
             st.session_state.show_info_modal = False
             st.rerun()
     
@@ -1118,6 +1125,43 @@ png_bytes = build_export_png(
 
 st.download_button("💾 Export Plot as PNG", data=png_bytes,
                   file_name=plot_title+".png", mime="image/png")
+
+# Info modal at bottom
+if st.session_state.show_info_modal:
+    st.divider()
+    with st.expander("ℹ️ Help & Information", expanded=True):
+        st.markdown("""
+**Select All Buttons**
+- Toggle all ε' or σ for a single file
+
+**Replicate Groups**
+- Create groups to average specific subsets of sheets
+- Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
+- Grouped sheets don't appear individually on the plot
+
+**Average & Error Bands**
+- Global toggle: average ALL selected sheets
+- Shows ±1 standard deviation as shaded region
+
+**Error Bands (±SD)**
+- Auto-shown for replicate groups
+- Shows uncertainty in the averaged data
+
+**Legend**
+- Customize names and reorder traces
+- Use ▲ and ▼ buttons
+
+**Frequency Markers**
+- Enter comma-separated frequencies to interpolate values
+- Results shown in table below plot
+
+**File Info**
+- Shows last modified time in file header
+        """)
+    
+    if st.button("Close Help", use_container_width=True):
+        st.session_state.show_info_modal = False
+        st.rerun()
 
 if marker_table_rows:
     st.divider()
