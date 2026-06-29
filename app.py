@@ -152,10 +152,8 @@ with st.sidebar:
             if file_id not in st.session_state.loaded_files:
                 sheets_dict = load_xlsx(file_obj.read())
                 
-                try:
-                    mod_time = datetime.fromtimestamp(os.path.getmtime(file_obj)).strftime("%b %d, %I:%M %p")
-                except:
-                    mod_time = "Unknown"
+                # Use current time as upload time (Streamlit doesn't expose file mod time)
+                mod_time = datetime.now().strftime("%b %d, %I:%M %p")
                 
                 st.session_state.loaded_files[file_id] = {
                     "name": file_obj.name,
@@ -524,10 +522,6 @@ with st.sidebar:
 plot_title = graph_title if st.session_state.loaded_files else "DAK-12 Dielectric Measurements"
 
 st.markdown(f"## {plot_title}")
-
-# Info button
-if st.button("ℹ️ Help & Information", use_container_width=False):
-    st.session_state.show_info_modal = not st.session_state.show_info_modal
 
 if not st.session_state.loaded_files:
     st.info("👈 Upload one or more DAK-12 XLSX files in the sidebar to get started.")
@@ -1150,10 +1144,6 @@ if st.session_state.show_info_modal:
 **File Info**
 - Shows last modified time in file header
         """)
-    
-    if st.button("Close Help", use_container_width=True):
-        st.session_state.show_info_modal = False
-        st.rerun()
 
 if marker_table_rows:
     st.divider()
