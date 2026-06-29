@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import io as _io
 import hashlib
+import os
+from datetime import datetime
 
 st.set_page_config(page_title="DAK-12 Visualizer", layout="wide", page_icon="🔬")
 
@@ -115,6 +117,18 @@ if "legend_order" not in st.session_state:
 if "show_average_and_bands" not in st.session_state:
     st.session_state.show_average_and_bands = False
 
+if "groupings" not in st.session_state:
+    st.session_state.groupings = {}
+
+if "group_names_editable" not in st.session_state:
+    st.session_state.group_names_editable = {}
+
+if "show_grouping_modal" not in st.session_state:
+    st.session_state.show_grouping_modal = False
+
+if "show_info_modal" not in st.session_state:
+    st.session_state.show_info_modal = False
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -128,23 +142,54 @@ with st.sidebar:
                                       type=["xlsx", "xlsm"], 
                                       accept_multiple_files=True)
     
-    # Process newly uploaded files
+    current_file_ids = set()
+    
     if uploaded_files:
         for file_obj in uploaded_files:
             file_id = get_file_id(file_obj)
+            current_file_ids.add(file_id)
             
             if file_id not in st.session_state.loaded_files:
                 sheets_dict = load_xlsx(file_obj.read())
+                
+                try:
+                    mod_time = datetime.fromtimestamp(os.path.getmtime(file_obj)).strftime("%b %d, %I:%M %p")
+                except:
+                    mod_time = "Unknown"
+                
                 st.session_state.loaded_files[file_id] = {
                     "name": file_obj.name,
                     "sheets": list(sheets_dict.keys()),
                     "sheets_dict": sheets_dict,
+                    "mod_time": mod_time,
                 }
                 
                 for sheet_key in sheets_dict.keys():
                     full_id = f"{file_id}|{sheet_key}"
                     if full_id not in st.session_state.legend_order:
                         st.session_state.legend_order.append(full_id)
+    
+    # Remove files that are no longer uploaded
+    files_to_remove = []
+    for file_id in list(st.session_state.loaded_files.keys()):
+        if file_id not in current_file_ids:
+            files_to_remove.append(file_id)
+    
+    for file_id in files_to_remove:
+        for sheet_key in st.session_state.loaded_files[file_id]["sheets"]:
+            full_id = f"{file_id}|{sheet_key}"
+            if full_id in st.session_state.legend_order:
+                st.session_state.legend_order.remove(full_id)
+            
+            for group_name in list(st.session_state.groupings.keys()):
+                if full_id in st.session_state.groupings[group_name]:
+                    st.session_state.groupings[group_name].remove(full_id)
+                    if not st.session_state.groupings[group_name]:
+                        del st.session_state.groupings[group_name]
+                        if group_name in st.session_state.group_names_editable:
+                            del st.session_state.group_names_editable[group_name]
+        
+        del st.session_state.loaded_files[file_id]
     
     # Build name map with auto-numbering
     sheet_name_counts = {}
@@ -181,7 +226,38 @@ with st.sidebar:
     show_sigma_map = {}
     
     for file_id, file_data in st.session_state.loaded_files.items():
-        with st.expander(f"📁 {file_data['name']}", expanded=True):
+        with st.expander(f"📁 {file_data['name']} — {file_data.get('mod_time', 'Unknown')}", expanded=True):
+            
+            # "All ε'" and "All σ" buttons
+            col_all_e, col_all_s = st.columns(2)
+            
+            def make_all_eps_cb(fid):
+                def _cb():
+                    for sk in st.session_state.loaded_files[fid]["sheets"]:
+                        full_id = f"{fid}|{sk}"
+                        st.session_state[f"eps_{full_id}"] = st.session_state.get(f"all_eps_{fid}", False)
+                        if st.session_state[f"eps_{full_id}"]:
+                            st.session_state[f"all_{full_id}"] = True
+                return _cb
+            
+            def make_all_sig_cb(fid):
+                def _cb():
+                    for sk in st.session_state.loaded_files[fid]["sheets"]:
+                        full_id = f"{fid}|{sk}"
+                        st.session_state[f"sig_{full_id}"] = st.session_state.get(f"all_sig_{fid}", False)
+                        if st.session_state[f"sig_{full_id}"]:
+                            st.session_state[f"all_{full_id}"] = True
+                return _cb
+            
+            with col_all_e:
+                st.checkbox("All ε'", key=f"all_eps_{file_id}", 
+                           on_change=make_all_eps_cb(file_id))
+            
+            with col_all_s:
+                st.checkbox("All σ", key=f"all_sig_{file_id}",
+                           on_change=make_all_sig_cb(file_id))
+            
+            st.divider()
             
             hc0, hc1, hc2, hc3 = st.columns([3.2, 0.7, 0.7, 0.7])
             hc1.markdown("<div style='text-align:center;font-size:10px;font-weight:600'>All</div>", unsafe_allow_html=True)
@@ -248,6 +324,106 @@ with st.sidebar:
         key="show_average_and_bands",
         help="When ON: calculates mean and SD across all selected sheets. When OFF: shows individual sheets."
     )
+    
+    if selected_keys:
+        st.divider()
+    
+    # Grouping system
+    st.markdown("**Replicate Groups**")
+    
+    col_group_btn, col_group_info = st.columns([1, 1])
+    
+    with col_group_btn:
+        if st.button("➕ New Group", use_container_width=True):
+            st.session_state.show_grouping_modal = True
+    
+    with col_group_info:
+        if st.button("ℹ️ Help", use_container_width=True):
+            st.session_state.show_info_modal = True
+    
+    if st.session_state.groupings:
+        st.caption("Groups:")
+        for group_name in list(st.session_state.groupings.keys()):
+            member_ids = st.session_state.groupings[group_name]
+            member_names = [display_names.get(fid, fid.split("|")[1]) for fid in member_ids]
+            
+            col_gname, col_gedit = st.columns([3, 0.5])
+            
+            with col_gname:
+                display_gname = st.session_state.group_names_editable.get(group_name, group_name)
+                new_gname = st.text_input(
+                    f"Group name", value=display_gname,
+                    key=f"group_name_{group_name}",
+                    label_visibility="collapsed"
+                )
+                if new_gname != st.session_state.group_names_editable.get(group_name, group_name):
+                    st.session_state.group_names_editable[group_name] = new_gname
+            
+            with col_gedit:
+                if st.button("🗑️", key=f"del_group_{group_name}", help="Delete group"):
+                    for fid in member_ids:
+                        if fid in st.session_state.legend_order:
+                            idx = st.session_state.legend_order.index(fid)
+                            st.session_state.legend_order[idx] = fid
+                    del st.session_state.groupings[group_name]
+                    if group_name in st.session_state.group_names_editable:
+                        del st.session_state.group_names_editable[group_name]
+                    st.rerun()
+            
+            st.caption(f"{', '.join(member_names)}")
+    
+    if selected_keys:
+        st.divider()
+    
+    # Grouping modal
+    if st.session_state.show_grouping_modal:
+        st.markdown("**Create New Group**")
+        group_name_input = st.text_input("Group name", placeholder="e.g., 'Buffer 1 replicates'", key="new_group_name")
+        
+        st.markdown("Select sheets:")
+        selected_for_group = {}
+        for full_id in selected_keys:
+            display_name = display_names.get(full_id, full_id)
+            selected_for_group[full_id] = st.checkbox(display_name, key=f"gselect_{full_id}")
+        
+        col_create, col_cancel = st.columns(2)
+        with col_create:
+            if st.button("Create", use_container_width=True):
+                if group_name_input and any(selected_for_group.values()):
+                    members = [fid for fid, selected in selected_for_group.items() if selected]
+                    st.session_state.groupings[group_name_input] = members
+                    st.session_state.group_names_editable[group_name_input] = group_name_input
+                    st.session_state.show_grouping_modal = False
+                    st.rerun()
+                else:
+                    st.error("Enter group name and select sheets")
+        
+        with col_cancel:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state.show_grouping_modal = False
+                st.rerun()
+    
+    # Info modal
+    if st.session_state.show_info_modal:
+        st.markdown("**Help**")
+        st.markdown("""
+**Select All**: Toggle all ε' or σ for a file
+
+**Replicate Groups**: Create groups to average subsets
+- "Buffer 1 replicates" (3 sheets) → 1 mean line
+- Grouped sheets don't appear individually
+
+**Error Bands (±SD)**: Shaded region shows ±1 std dev
+- Only shown when using groups or global averaging
+
+**Legend**: Customize names and reorder
+
+**Frequency Markers**: Interpolate values at specific frequencies
+        """)
+        
+        if st.button("Close", use_container_width=True):
+            st.session_state.show_info_modal = False
+            st.rerun()
     
     if selected_keys:
         st.divider()
@@ -340,7 +516,16 @@ with st.sidebar:
 
 plot_title = graph_title if st.session_state.loaded_files else "DAK-12 Dielectric Measurements"
 
-st.markdown(f"## {plot_title}")
+# Top section with info button
+col_title, col_info_btn = st.columns([10, 1])
+
+with col_title:
+    st.markdown(f"## {plot_title}")
+
+with col_info_btn:
+    if st.button("ℹ️", help="Show help"):
+        st.session_state.show_info_modal = True
+        st.rerun()
 
 if not st.session_state.loaded_files:
     st.info("👈 Upload one or more DAK-12 XLSX files in the sidebar to get started.")
@@ -357,15 +542,23 @@ y2_lo = parse_lim(y2min); y2_hi = parse_lim(y2max)
 any_eps = any(show_eps_map.get(k) for k in selected_keys)
 any_sigma = any(show_sigma_map.get(k) for k in selected_keys)
 
+# ── Build grouping info ───────────────────────────────────────────────────────
+
+sheet_to_group = {}
+for group_name, member_ids in st.session_state.groupings.items():
+    for full_id in member_ids:
+        sheet_to_group[full_id] = group_name
+
 # ── Global averaging logic ────────────────────────────────────────────────────
 
 global_stats = None
 if show_average_and_bands and selected_keys:
     dfs = []
     for full_id in selected_keys:
-        file_id, sheet_key = full_id.split("|")
-        df = st.session_state.loaded_files[file_id]["sheets_dict"][sheet_key]["df"]
-        dfs.append(df)
+        if full_id not in sheet_to_group:
+            file_id, sheet_key = full_id.split("|")
+            df = st.session_state.loaded_files[file_id]["sheets_dict"][sheet_key]["df"]
+            dfs.append(df)
     
     if dfs:
         freq = dfs[0]["f (MHz)"].values
@@ -386,11 +579,40 @@ if show_average_and_bands and selected_keys:
             "sigma_sd": sigma_sd,
         }
 
+# ── Group statistics ──────────────────────────────────────────────────────────
+
+group_stats = {}
+for group_name, member_ids in st.session_state.groupings.items():
+    dfs = []
+    for full_id in member_ids:
+        file_id, sheet_key = full_id.split("|")
+        df = st.session_state.loaded_files[file_id]["sheets_dict"][sheet_key]["df"]
+        dfs.append(df)
+    
+    if dfs:
+        freq = dfs[0]["f (MHz)"].values
+        eps_vals = np.array([df["eps"].values for df in dfs])
+        sigma_vals = np.array([df["sigma"].values for df in dfs])
+        
+        eps_mean = np.mean(eps_vals, axis=0)
+        eps_sd = np.std(eps_vals, axis=0, ddof=1) if len(dfs) > 1 else np.zeros_like(eps_mean)
+        
+        sigma_mean = np.mean(sigma_vals, axis=0)
+        sigma_sd = np.std(sigma_vals, axis=0, ddof=1) if len(dfs) > 1 else np.zeros_like(sigma_mean)
+        
+        group_stats[group_name] = {
+            "freq": freq,
+            "eps_mean": eps_mean,
+            "eps_sd": eps_sd,
+            "sigma_mean": sigma_mean,
+            "sigma_sd": sigma_sd,
+        }
+
 fig = go.Figure()
 
 marker_table_rows = []
 
-# If averaging is ON, show only mean + error bands
+# If global averaging is ON, show only mean + error bands
 if show_average_and_bands and global_stats:
     stats = global_stats
     
@@ -493,72 +715,184 @@ if show_average_and_bands and global_stats:
                 })
 
 else:
+    # Show individual sheets (not in groups) and groups as means
+    plotted_groups = set()
+    
     for k in selected_keys:
-        file_id, sheet_key = k.split("|")
-        file_data = st.session_state.loaded_files[file_id]
-        sheets_dict = file_data["sheets_dict"]
-        
-        all_keys_ever = list(st.session_state.legend_order)
-        idx = all_keys_ever.index(k) if k in all_keys_ever else 0
-        color = COLORS[idx % len(COLORS)]
-        
-        df = sheets_dict[sheet_key]["df"]
-        freq = df["f (MHz)"].values
-        eps = df["eps"].values
-        sigma = df["sigma"].values
-        
-        name = legend_names.get(k, display_names.get(k, k))
-        
-        if show_eps_map.get(k):
-            fig.add_trace(go.Scatter(
-                x=freq, y=eps,
-                name=f"{name} ε'",
-                line=dict(color=color, width=2, dash="solid"),
-                mode="lines", yaxis="y1",
-                hovertemplate=f"<b>{name} — ε'</b><br>Freq: %{{x:.1f}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
-            ))
-        
-        if show_sigma_map.get(k):
-            fig.add_trace(go.Scatter(
-                x=freq, y=sigma,
-                name=f"{name} σ",
-                line=dict(color=color, width=2, dash="dash"),
-                mode="lines", yaxis="y2",
-                hovertemplate=f"<b>{name} — σ</b><br>Freq: %{{x:.1f}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
-            ))
-        
-        if marker_freqs:
-            f_eps_fn = interp1d(freq, eps, kind="cubic", fill_value="extrapolate")
-            f_sigma_fn = interp1d(freq, sigma, kind="cubic", fill_value="extrapolate")
+        # If this sheet is in a group, plot the group instead
+        if k in sheet_to_group:
+            group_name = sheet_to_group[k]
+            if group_name in plotted_groups:
+                continue
             
-            valid_mf = [mf for mf in marker_freqs if freq.min() <= mf <= freq.max()]
+            plotted_groups.add(group_name)
+            stats = group_stats[group_name]
             
-            if valid_mf:
-                ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
-                sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+            display_name = st.session_state.group_names_editable.get(group_name, group_name)
+            all_keys_ever = list(st.session_state.legend_order)
+            idx = all_keys_ever.index(k) if k in all_keys_ever else 0
+            color = COLORS[idx % len(COLORS)]
+            
+            if any_eps:
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=stats["eps_mean"],
+                    name=f"{display_name} ε'",
+                    line=dict(color=color, width=2.5, dash="solid"),
+                    mode="lines", yaxis="y1",
+                    hovertemplate=f"<b>{display_name} ε'</b><br>Freq: %{{x:.1f}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
+                ))
                 
-                if show_eps_map.get(k):
-                    fig.add_trace(go.Scatter(
-                        x=valid_mf, y=ep_vals, mode="markers",
-                        marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
-                        yaxis="y1", showlegend=False,
-                        hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
-                    ))
+                upper = stats["eps_mean"] + stats["eps_sd"]
+                lower = stats["eps_mean"] - stats["eps_sd"]
                 
-                if show_sigma_map.get(k):
-                    fig.add_trace(go.Scatter(
-                        x=valid_mf, y=sg_vals, mode="markers",
-                        marker=dict(color=color, size=8, symbol="diamond",
-                                   line=dict(color="#e65100", width=2)),
-                        yaxis="y2", showlegend=False,
-                        hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
-                    ))
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=upper,
+                    fill=None, mode="lines",
+                    line_color="rgba(255,255,255,0)",
+                    showlegend=False, hoverinfo="skip",
+                    yaxis="y1"
+                ))
                 
-                for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
-                    marker_table_rows.append({
-                        "Buffer": name, "Freq (MHz)": mf,
-                        "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
-                    })
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=lower,
+                    fill="tonexty", mode="lines",
+                    line_color="rgba(255,255,255,0)",
+                    fillcolor=f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.2)",
+                    showlegend=False,
+                    yaxis="y1",
+                    hoverinfo="skip"
+                ))
+            
+            if any_sigma:
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=stats["sigma_mean"],
+                    name=f"{display_name} σ",
+                    line=dict(color=color, width=2.5, dash="dash"),
+                    mode="lines", yaxis="y2",
+                    hovertemplate=f"<b>{display_name} σ</b><br>Freq: %{{x:.1f}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
+                ))
+                
+                upper = stats["sigma_mean"] + stats["sigma_sd"]
+                lower = stats["sigma_mean"] - stats["sigma_sd"]
+                
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=upper,
+                    fill=None, mode="lines",
+                    line_color="rgba(255,255,255,0)",
+                    showlegend=False, hoverinfo="skip",
+                    yaxis="y2"
+                ))
+                
+                fig.add_trace(go.Scatter(
+                    x=stats["freq"], y=lower,
+                    fill="tonexty", mode="lines",
+                    line_color="rgba(255,255,255,0)",
+                    fillcolor=f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.2)",
+                    showlegend=False,
+                    yaxis="y2",
+                    hoverinfo="skip"
+                ))
+            
+            if marker_freqs:
+                f_eps_fn = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
+                f_sigma_fn = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
+                
+                valid_mf = [mf for mf in marker_freqs if stats["freq"].min() <= mf <= stats["freq"].max()]
+                
+                if valid_mf:
+                    ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
+                    sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+                    
+                    if any_eps:
+                        fig.add_trace(go.Scatter(
+                            x=valid_mf, y=ep_vals, mode="markers",
+                            marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
+                            yaxis="y1", showlegend=False,
+                            hovertemplate=f"<b>{display_name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
+                        ))
+                    
+                    if any_sigma:
+                        fig.add_trace(go.Scatter(
+                            x=valid_mf, y=sg_vals, mode="markers",
+                            marker=dict(color=color, size=8, symbol="diamond",
+                                       line=dict(color="#e65100", width=2)),
+                            yaxis="y2", showlegend=False,
+                            hovertemplate=f"<b>{display_name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
+                        ))
+                    
+                    for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+                        marker_table_rows.append({
+                            "Buffer": display_name, "Freq (MHz)": mf,
+                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                        })
+        
+        else:
+            # Not in a group, show individual sheet
+            file_id, sheet_key = k.split("|")
+            file_data = st.session_state.loaded_files[file_id]
+            sheets_dict = file_data["sheets_dict"]
+            
+            all_keys_ever = list(st.session_state.legend_order)
+            idx = all_keys_ever.index(k) if k in all_keys_ever else 0
+            color = COLORS[idx % len(COLORS)]
+            
+            df = sheets_dict[sheet_key]["df"]
+            freq = df["f (MHz)"].values
+            eps = df["eps"].values
+            sigma = df["sigma"].values
+            
+            name = legend_names.get(k, display_names.get(k, k))
+            
+            if show_eps_map.get(k):
+                fig.add_trace(go.Scatter(
+                    x=freq, y=eps,
+                    name=f"{name} ε'",
+                    line=dict(color=color, width=2, dash="solid"),
+                    mode="lines", yaxis="y1",
+                    hovertemplate=f"<b>{name} — ε'</b><br>Freq: %{{x:.1f}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
+                ))
+            
+            if show_sigma_map.get(k):
+                fig.add_trace(go.Scatter(
+                    x=freq, y=sigma,
+                    name=f"{name} σ",
+                    line=dict(color=color, width=2, dash="dash"),
+                    mode="lines", yaxis="y2",
+                    hovertemplate=f"<b>{name} — σ</b><br>Freq: %{{x:.1f}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
+                ))
+            
+            if marker_freqs:
+                f_eps_fn = interp1d(freq, eps, kind="cubic", fill_value="extrapolate")
+                f_sigma_fn = interp1d(freq, sigma, kind="cubic", fill_value="extrapolate")
+                
+                valid_mf = [mf for mf in marker_freqs if freq.min() <= mf <= freq.max()]
+                
+                if valid_mf:
+                    ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
+                    sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+                    
+                    if show_eps_map.get(k):
+                        fig.add_trace(go.Scatter(
+                            x=valid_mf, y=ep_vals, mode="markers",
+                            marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
+                            yaxis="y1", showlegend=False,
+                            hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
+                        ))
+                    
+                    if show_sigma_map.get(k):
+                        fig.add_trace(go.Scatter(
+                            x=valid_mf, y=sg_vals, mode="markers",
+                            marker=dict(color=color, size=8, symbol="diamond",
+                                       line=dict(color="#e65100", width=2)),
+                            yaxis="y2", showlegend=False,
+                            hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
+                        ))
+                    
+                    for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+                        marker_table_rows.append({
+                            "Buffer": name, "Freq (MHz)": mf,
+                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                        })
 
 if not any_eps and any_sigma:
     df0 = st.session_state.loaded_files[list(st.session_state.loaded_files.keys())[0]]["sheets_dict"][st.session_state.loaded_files[list(st.session_state.loaded_files.keys())[0]]["sheets"][0]]["df"]
@@ -641,7 +975,7 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
                     marker_freqs, eps_hlines, sigma_hlines,
                     any_eps, any_sigma, plot_title,
                     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi,
-                    global_stats, show_average_and_bands):
+                    global_stats, show_average_and_bands, sheet_to_group, group_stats, group_names_editable):
     
     fig_ex, ax1_ex = plt.subplots(figsize=(12, 6), facecolor="white")
     fig_ex.subplots_adjust(left=0.09, right=0.88, top=0.92, bottom=0.10)
@@ -690,58 +1024,61 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
             upper = stats["sigma_mean"] + stats["sigma_sd"]
             lower = stats["sigma_mean"] - stats["sigma_sd"]
             ax2_ex.fill_between(stats["freq"], lower, upper, color=sigma_color, alpha=0.2)
-        
-        if marker_freqs:
-            f_e = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
-            f_s = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
-            
-            for mf in marker_freqs:
-                if stats["freq"].min() <= mf <= stats["freq"].max():
-                    if any_eps:
-                        ax1_ex.plot(mf, float(f_e(mf)), "o", color=mean_color,
-                                   markeredgecolor="#e65100", markeredgewidth=1.5,
-                                   markersize=7, zorder=6)
-                    if any_sigma:
-                        ax2_ex.plot(mf, float(f_s(mf)), "D", color=sigma_color,
-                                   markeredgecolor="#e65100", markeredgewidth=1.5,
-                                   markersize=6, zorder=6)
     
     else:
+        plotted_groups = set()
+        
         for k in selected_keys:
-            file_id, sheet_key = k.split("|")
-            file_data = st_session.loaded_files[file_id]
-            sheets_dict = file_data["sheets_dict"]
-            
-            all_keys_ever = list(st_session.legend_order)
-            idx = all_keys_ever.index(k) if k in all_keys_ever else 0
-            color = COLORS[idx % len(COLORS)]
-            
-            df = sheets_dict[sheet_key]["df"]
-            freq = df["f (MHz)"].values
-            name = legend_names.get(k, display_names.get(k, k))
-            
-            if show_eps_map.get(k):
-                ax1_ex.plot(freq, df["eps"].values, color=color, linewidth=1.8)
-                handles.append(Line2D([0],[0], color=color, lw=2, label=f"{name} ε'"))
-            
-            if show_sigma_map.get(k):
-                ax2_ex.plot(freq, df["sigma"].values, color=color, lw=1.8, linestyle="--")
-                handles.append(Line2D([0],[0], color=color, lw=2, linestyle="--", label=f"{name} σ"))
-            
-            if marker_freqs:
-                f_e = interp1d(freq, df["eps"].values, kind="cubic", fill_value="extrapolate")
-                f_s = interp1d(freq, df["sigma"].values, kind="cubic", fill_value="extrapolate")
+            if k in sheet_to_group:
+                group_name = sheet_to_group[k]
+                if group_name in plotted_groups:
+                    continue
                 
-                for mf in marker_freqs:
-                    if freq.min() <= mf <= freq.max():
-                        if show_eps_map.get(k):
-                            ax1_ex.plot(mf, float(f_e(mf)), "o", color=color,
-                                       markeredgecolor="#e65100", markeredgewidth=1.5,
-                                       markersize=7, zorder=6)
-                        if show_sigma_map.get(k):
-                            ax2_ex.plot(mf, float(f_s(mf)), "D", color=color,
-                                       markeredgecolor="#e65100", markeredgewidth=1.5,
-                                       markersize=6, zorder=6)
+                plotted_groups.add(group_name)
+                stats = group_stats[group_name]
+                
+                all_keys_ever = list(st_session.legend_order)
+                idx = all_keys_ever.index(k) if k in all_keys_ever else 0
+                color = COLORS[idx % len(COLORS)]
+                
+                display_name = group_names_editable.get(group_name, group_name)
+                
+                if any_eps:
+                    ax1_ex.plot(stats["freq"], stats["eps_mean"], color=color, linewidth=1.8)
+                    handles.append(Line2D([0],[0], color=color, lw=2, label=f"{display_name} ε'"))
+                    
+                    upper = stats["eps_mean"] + stats["eps_sd"]
+                    lower = stats["eps_mean"] - stats["eps_sd"]
+                    ax1_ex.fill_between(stats["freq"], lower, upper, color=color, alpha=0.2)
+                
+                if any_sigma:
+                    ax2_ex.plot(stats["freq"], stats["sigma_mean"], color=color, lw=1.8, linestyle="--")
+                    handles.append(Line2D([0],[0], color=color, lw=2, linestyle="--", label=f"{display_name} σ"))
+                    
+                    upper = stats["sigma_mean"] + stats["sigma_sd"]
+                    lower = stats["sigma_mean"] - stats["sigma_sd"]
+                    ax2_ex.fill_between(stats["freq"], lower, upper, color=color, alpha=0.2)
+            
+            else:
+                file_id, sheet_key = k.split("|")
+                file_data = st_session.loaded_files[file_id]
+                sheets_dict = file_data["sheets_dict"]
+                
+                all_keys_ever = list(st_session.legend_order)
+                idx = all_keys_ever.index(k) if k in all_keys_ever else 0
+                color = COLORS[idx % len(COLORS)]
+                
+                df = sheets_dict[sheet_key]["df"]
+                freq = df["f (MHz)"].values
+                name = legend_names.get(k, display_names.get(k, k))
+                
+                if show_eps_map.get(k):
+                    ax1_ex.plot(freq, df["eps"].values, color=color, linewidth=1.8)
+                    handles.append(Line2D([0],[0], color=color, lw=2, label=f"{name} ε'"))
+                
+                if show_sigma_map.get(k):
+                    ax2_ex.plot(freq, df["sigma"].values, color=color, lw=1.8, linestyle="--")
+                    handles.append(Line2D([0],[0], color=color, lw=2, linestyle="--", label=f"{name} σ"))
     
     for val in eps_hlines:
         ax1_ex.axhline(val, color="#1f77b4", linewidth=1.2, linestyle=":")
@@ -774,7 +1111,7 @@ png_bytes = build_export_png(
     marker_freqs, eps_hlines, sigma_hlines,
     any_eps, any_sigma, plot_title,
     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi,
-    global_stats, show_average_and_bands)
+    global_stats, show_average_and_bands, sheet_to_group, group_stats, st.session_state.group_names_editable)
 
 st.download_button("💾 Export Plot as PNG", data=png_bytes,
                   file_name=plot_title+".png", mime="image/png")
