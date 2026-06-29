@@ -20,6 +20,12 @@ st.markdown("""
 .stSidebar > div:first-child { padding-top: 1rem; }
 h1 { font-size: 1.6rem !important; }
 div[data-testid="column"] { padding: 0 4px; }
+.info-btn-container {
+    position: fixed;
+    top: 10px;
+    right: 20px;
+    z-index: 999;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -516,16 +522,13 @@ with st.sidebar:
 
 plot_title = graph_title if st.session_state.loaded_files else "DAK-12 Dielectric Measurements"
 
-# Top section with info button
-col_title, col_info_btn = st.columns([10, 1])
+# Info button at top right
+st.markdown('<div class="info-btn-container">', unsafe_allow_html=True)
+if st.button("ℹ️ Help", help="Show help & information"):
+    st.session_state.show_info_modal = not st.session_state.show_info_modal
+st.markdown('</div>', unsafe_allow_html=True)
 
-with col_title:
-    st.markdown(f"## {plot_title}")
-
-with col_info_btn:
-    if st.button("ℹ️", help="Show help"):
-        st.session_state.show_info_modal = True
-        st.rerun()
+st.markdown(f"## {plot_title}")
 
 if not st.session_state.loaded_files:
     st.info("👈 Upload one or more DAK-12 XLSX files in the sidebar to get started.")
