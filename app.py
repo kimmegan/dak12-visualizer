@@ -155,6 +155,13 @@ if "show_grouping_modal" not in st.session_state:
 if "show_info_modal" not in st.session_state:
     st.session_state.show_info_modal = False
 
+# Current sheet -> group mapping, computed once per run so both the sidebar
+# (group-creation tree) and the main plot use the exact same, up-to-date view.
+sheet_to_group = {}
+for _group_name, _member_ids in st.session_state.groupings.items():
+    for _full_id in _member_ids:
+        sheet_to_group[_full_id] = _group_name
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -254,7 +261,7 @@ with st.sidebar:
     show_sigma_map = {}
     
     for file_id, file_data in st.session_state.loaded_files.items():
-        with st.expander(f"📁 {file_data['name']}", expanded=True):
+        with st.expander(f"📁 {file_data['name']}", expanded=False):
             st.caption(f"🕒 {file_data.get('date_str', 'No date available')}")
             
             # "All ε'" and "All σ" buttons
@@ -361,6 +368,12 @@ with st.sidebar:
     st.markdown("**Replicate Groups**")
     
     if st.button("➕ New Group", use_container_width=True):
+        # Clear any leftover selections/name from a previous group-creation
+        # session so the modal always starts fresh (this was silently
+        # overwriting earlier groups when a stale name was reused).
+        for _k in list(st.session_state.keys()):
+            if _k.startswith("gselect_") or _k == "new_group_name":
+                del st.session_state[_k]
         st.session_state.show_grouping_modal = True
     
     if st.session_state.groupings:
@@ -411,9 +424,12 @@ with st.sidebar:
         group_name_input = st.text_input("Group name", placeholder="e.g., 'Buffer 1 replicates'", key="new_group_name")
         
         st.markdown("Select sheets:")
+        st.caption("Sheets already in another group aren't listed — remove them from that group first if you need to move them.")
         selected_for_group = {}
         
-        for full_id in selected_keys:
+        assignable_full_ids = [fid for fid in selected_keys if fid not in sheet_to_group]
+        
+        for full_id in assignable_full_ids:
             if f"gselect_{full_id}" not in st.session_state:
                 st.session_state[f"gselect_{full_id}"] = False
         
@@ -425,11 +441,11 @@ with st.sidebar:
             return _cb
         
         for file_id, file_data in st.session_state.loaded_files.items():
-            file_keys = [f"{file_id}|{sk}" for sk in file_data["sheets"] if f"{file_id}|{sk}" in selected_keys]
+            file_keys = [f"{file_id}|{sk}" for sk in file_data["sheets"] if f"{file_id}|{sk}" in assignable_full_ids]
             if not file_keys:
                 continue
             
-            with st.expander(f"📁 {file_data['name']}", expanded=True):
+            with st.expander(f"📁 {file_data['name']}", expanded=False):
                 if f"gselect_all_{file_id}" not in st.session_state:
                     st.session_state[f"gselect_all_{file_id}"] = False
                 
@@ -446,18 +462,26 @@ with st.sidebar:
         col_create, col_cancel = st.columns(2)
         with col_create:
             if st.button("Create", use_container_width=True):
-                if group_name_input and any(selected_for_group.values()):
+                if not group_name_input or not any(selected_for_group.values()):
+                    st.error("Enter group name and select sheets")
+                elif group_name_input in st.session_state.groupings:
+                    st.error(f"A group named '{group_name_input}' already exists — choose a different name.")
+                else:
                     members = [fid for fid, selected in selected_for_group.items() if selected]
                     st.session_state.groupings[group_name_input] = members
                     st.session_state.group_names_editable[group_name_input] = group_name_input
                     st.session_state.show_grouping_modal = False
+                    for _k in list(st.session_state.keys()):
+                        if _k.startswith("gselect_") or _k == "new_group_name":
+                            del st.session_state[_k]
                     st.rerun()
-                else:
-                    st.error("Enter group name and select sheets")
         
         with col_cancel:
             if st.button("Cancel", use_container_width=True):
                 st.session_state.show_grouping_modal = False
+                for _k in list(st.session_state.keys()):
+                    if _k.startswith("gselect_") or _k == "new_group_name":
+                        del st.session_state[_k]
                 st.rerun()
     
     # Info modal
@@ -605,14 +629,8 @@ y2_lo = parse_lim(y2min); y2_hi = parse_lim(y2max)
 any_eps = any(show_eps_map.get(k) for k in selected_keys)
 any_sigma = any(show_sigma_map.get(k) for k in selected_keys)
 
-# ── Build grouping info ───────────────────────────────────────────────────────
-
-sheet_to_group = {}
-for group_name, member_ids in st.session_state.groupings.items():
-    for full_id in member_ids:
-        sheet_to_group[full_id] = group_name
-
 # ── Global averaging logic ────────────────────────────────────────────────────
+# (sheet_to_group was already computed above, before the sidebar was rendered)
 
 global_stats = None
 if show_average_and_bands and selected_keys:
