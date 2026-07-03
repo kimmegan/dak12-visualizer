@@ -435,7 +435,7 @@ with st.sidebar:
         
         def make_select_all_file_cb(fid, file_keys):
             def _cb():
-                val = st.session_state[f"gselect_all_{fid}"]
+                val = st.session_state.get(f"gselect_all_{fid}", False)
                 for fk in file_keys:
                     st.session_state[f"gselect_{fk}"] = val
             return _cb
