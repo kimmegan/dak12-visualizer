@@ -30,6 +30,21 @@ COLORS = [
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
+def parse_date_cell(cell_value):
+    """Parse a 'Date : 2026-Jun-08 10:07:49' style cell into a clean display string."""
+    s = str(cell_value).strip()
+    if not s.lower().startswith("date"):
+        return None
+    parts = s.split(":", 1)
+    if len(parts) != 2:
+        return None
+    date_part = parts[1].strip()
+    try:
+        dt = datetime.strptime(date_part, "%Y-%b-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return dt.strftime("%b %d, %Y · %I:%M %p")
+
 @st.cache_data
 def load_xlsx(file_bytes):
     xl = pd.ExcelFile(_io.BytesIO(file_bytes))
@@ -46,6 +61,10 @@ def load_xlsx(file_bytes):
                 if len(parts) == 2:
                     label = parts[1].strip()
                 break
+        
+        date_str = None
+        if raw.shape[0] > 1:
+            date_str = parse_date_cell(raw.iloc[1, 0])
         
         header_row = None
         for i, row in raw.iterrows():
@@ -82,7 +101,7 @@ def load_xlsx(file_bytes):
         df["sigma"] = pd.to_numeric(df[sigma_col], errors="coerce")
         
         df = df[["f (MHz)", "eps", "sigma"]].sort_values("f (MHz)").reset_index(drop=True)
-        sheets[sn] = {"name": label, "df": df}
+        sheets[sn] = {"name": label, "df": df, "date_str": date_str}
     
     return sheets
 
@@ -105,6 +124,13 @@ def get_file_id(file_obj):
     content = file_obj.read()
     file_obj.seek(0)
     return hashlib.md5(content).hexdigest()
+
+def get_group_color(group_name):
+    """Assign each replicate group its own distinct color based on group order."""
+    names = list(st.session_state.groupings.keys())
+    if group_name in names:
+        return COLORS[names.index(group_name) % len(COLORS)]
+    return COLORS[0]
 
 # ── Initialize session state ──────────────────────────────────────────────────
 
@@ -152,14 +178,18 @@ with st.sidebar:
             if file_id not in st.session_state.loaded_files:
                 sheets_dict = load_xlsx(file_obj.read())
                 
-                # Use current time as upload time (Streamlit doesn't expose file mod time)
-                mod_time = datetime.now().strftime("%b %d, %I:%M %p")
+                # Date/time comes from row 2, column A of the first valid buffer sheet
+                if sheets_dict:
+                    first_sheet_key = list(sheets_dict.keys())[0]
+                    file_date_str = sheets_dict[first_sheet_key].get("date_str") or "No date available"
+                else:
+                    file_date_str = "No date available"
                 
                 st.session_state.loaded_files[file_id] = {
                     "name": file_obj.name,
                     "sheets": list(sheets_dict.keys()),
                     "sheets_dict": sheets_dict,
-                    "mod_time": mod_time,
+                    "date_str": file_date_str,
                 }
                 
                 for sheet_key in sheets_dict.keys():
@@ -224,7 +254,8 @@ with st.sidebar:
     show_sigma_map = {}
     
     for file_id, file_data in st.session_state.loaded_files.items():
-        with st.expander(f"📁 {file_data['name']} — {file_data.get('mod_time', 'Unknown')}", expanded=True):
+        with st.expander(f"📁 {file_data['name']}", expanded=True):
+            st.caption(f"🕒 {file_data.get('date_str', 'No date available')}")
             
             # "All ε'" and "All σ" buttons
             col_all_e, col_all_s = st.columns(2)
@@ -337,6 +368,14 @@ with st.sidebar:
         for group_name in list(st.session_state.groupings.keys()):
             member_ids = st.session_state.groupings[group_name]
             member_names = [display_names.get(fid, fid.split("|")[1]) for fid in member_ids]
+            group_color = get_group_color(group_name)
+            
+            st.markdown(
+                f"<div style='display:flex;align-items:center;gap:6px;margin-top:4px'>"
+                f"<span style='display:inline-block;width:9px;height:9px;border-radius:50%;"
+                f"background:{group_color};flex-shrink:0'></span>"
+                f"<span style='font-size:10px;color:#888'>group color</span></div>",
+                unsafe_allow_html=True)
             
             col_gname, col_gedit = st.columns([3, 0.5])
             
@@ -373,9 +412,36 @@ with st.sidebar:
         
         st.markdown("Select sheets:")
         selected_for_group = {}
+        
         for full_id in selected_keys:
-            display_name = display_names.get(full_id, full_id)
-            selected_for_group[full_id] = st.checkbox(display_name, key=f"gselect_{full_id}")
+            if f"gselect_{full_id}" not in st.session_state:
+                st.session_state[f"gselect_{full_id}"] = False
+        
+        def make_select_all_file_cb(fid, file_keys):
+            def _cb():
+                val = st.session_state[f"gselect_all_{fid}"]
+                for fk in file_keys:
+                    st.session_state[f"gselect_{fk}"] = val
+            return _cb
+        
+        for file_id, file_data in st.session_state.loaded_files.items():
+            file_keys = [f"{file_id}|{sk}" for sk in file_data["sheets"] if f"{file_id}|{sk}" in selected_keys]
+            if not file_keys:
+                continue
+            
+            with st.expander(f"📁 {file_data['name']}", expanded=True):
+                if f"gselect_all_{file_id}" not in st.session_state:
+                    st.session_state[f"gselect_all_{file_id}"] = False
+                
+                st.checkbox("Select all buffers in this file", key=f"gselect_all_{file_id}",
+                           on_change=make_select_all_file_cb(file_id, file_keys))
+                
+                for full_id in file_keys:
+                    display_name = display_names.get(full_id, full_id)
+                    col_indent, col_check = st.columns([0.3, 3])
+                    with col_check:
+                        selected_for_group[full_id] = st.checkbox(
+                            display_name, key=f"gselect_{full_id}")
         
         col_create, col_cancel = st.columns(2)
         with col_create:
@@ -405,6 +471,7 @@ with st.sidebar:
 - Create groups to average specific subsets of sheets
 - Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
 - Grouped sheets don't appear individually on the plot
+- Each group gets its own distinct color in the legend
 
 **Average & Error Bands**
 - Global toggle: average ALL selected sheets
@@ -423,7 +490,7 @@ with st.sidebar:
 - Results shown in table below plot
 
 **File Info**
-- Shows last modified time in file header
+- Date/time is read from row 2, column A of the first buffer in each file
             """)
         
         if st.button("Close Help", use_container_width=True):
@@ -725,9 +792,7 @@ else:
             stats = group_stats[group_name]
             
             display_name = st.session_state.group_names_editable.get(group_name, group_name)
-            all_keys_ever = list(st.session_state.legend_order)
-            idx = all_keys_ever.index(k) if k in all_keys_ever else 0
-            color = COLORS[idx % len(COLORS)]
+            color = get_group_color(group_name)
             
             if any_eps:
                 fig.add_trace(go.Scatter(
@@ -973,6 +1038,8 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
                     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi,
                     global_stats, show_average_and_bands, sheet_to_group, group_stats, group_names_editable):
     
+    group_name_list = list(st_session.groupings.keys())
+    
     fig_ex, ax1_ex = plt.subplots(figsize=(12, 6), facecolor="white")
     fig_ex.subplots_adjust(left=0.09, right=0.88, top=0.92, bottom=0.10)
     
@@ -1033,9 +1100,7 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
                 plotted_groups.add(group_name)
                 stats = group_stats[group_name]
                 
-                all_keys_ever = list(st_session.legend_order)
-                idx = all_keys_ever.index(k) if k in all_keys_ever else 0
-                color = COLORS[idx % len(COLORS)]
+                color = COLORS[group_name_list.index(group_name) % len(COLORS)] if group_name in group_name_list else COLORS[0]
                 
                 display_name = group_names_editable.get(group_name, group_name)
                 
@@ -1124,6 +1189,7 @@ if st.session_state.show_info_modal:
 - Create groups to average specific subsets of sheets
 - Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
 - Grouped sheets don't appear individually on the plot
+- Each group gets its own distinct color in the legend
 
 **Average & Error Bands**
 - Global toggle: average ALL selected sheets
@@ -1142,7 +1208,7 @@ if st.session_state.show_info_modal:
 - Results shown in table below plot
 
 **File Info**
-- Shows last modified time in file header
+- Date/time is read from row 2, column A of the first buffer in each file
         """)
 
 if marker_table_rows:
