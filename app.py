@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.interpolate import interp1da
+from scipy.interpolate import interp1d
 import plotly.graph_objects as go
 import matplotlib
 matplotlib.use("Agg")
