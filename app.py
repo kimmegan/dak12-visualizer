@@ -30,21 +30,6 @@ COLORS = [
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-def parse_date_cell(cell_value):
-    """Parse a 'Date : 2026-Jun-08 10:07:49' style cell into a clean display string."""
-    s = str(cell_value).strip()
-    if not s.lower().startswith("date"):
-        return None
-    parts = s.split(":", 1)
-    if len(parts) != 2:
-        return None
-    date_part = parts[1].strip()
-    try:
-        dt = datetime.strptime(date_part, "%Y-%b-%d %H:%M:%S")
-    except ValueError:
-        return None
-    return dt.strftime("%b %d, %Y · %I:%M %p")
-
 @st.cache_data
 def load_xlsx(file_bytes):
     xl = pd.ExcelFile(_io.BytesIO(file_bytes))
@@ -61,10 +46,6 @@ def load_xlsx(file_bytes):
                 if len(parts) == 2:
                     label = parts[1].strip()
                 break
-        
-        date_str = None
-        if raw.shape[0] > 1:
-            date_str = parse_date_cell(raw.iloc[1, 0])
         
         header_row = None
         for i, row in raw.iterrows():
@@ -101,7 +82,7 @@ def load_xlsx(file_bytes):
         df["sigma"] = pd.to_numeric(df[sigma_col], errors="coerce")
         
         df = df[["f (MHz)", "eps", "sigma"]].sort_values("f (MHz)").reset_index(drop=True)
-        sheets[sn] = {"name": label, "df": df, "date_str": date_str}
+        sheets[sn] = {"name": label, "df": df}
     
     return sheets
 
@@ -111,26 +92,32 @@ def parse_lim(v):
     except Exception:
         return None
 
-def parse_list(s):
-    vals = []
-    for part in s.split(","):
-        v = parse_lim(part)
-        if v is not None:
-            vals.append(v)
-    return vals
+def extract_date_from_file(file_bytes):
+    """Extract date from row 2, column A of first sheet"""
+    try:
+        xl = pd.ExcelFile(_io.BytesIO(file_bytes))
+        first_sheet = xl.sheet_names[0]
+        df = pd.read_excel(_io.BytesIO(file_bytes), sheet_name=first_sheet, header=None)
+        
+        if len(df) > 1:
+            cell_value = str(df.iloc[1, 0])
+            
+            if "Date :" in cell_value:
+                date_part = cell_value.split("Date :")[1].strip()
+                try:
+                    parsed_date = datetime.strptime(date_part, "%Y-%b-%d %H:%M:%S")
+                    return parsed_date.strftime("%b %d, %Y %I:%M %p")
+                except:
+                    return "no date available"
+        return "no date available"
+    except:
+        return "no date available"
 
 def get_file_id(file_obj):
     """Generate stable ID for uploaded file"""
     content = file_obj.read()
     file_obj.seek(0)
     return hashlib.md5(content).hexdigest()
-
-def get_group_color(group_name):
-    """Assign each replicate group its own distinct color based on group order."""
-    names = list(st.session_state.groupings.keys())
-    if group_name in names:
-        return COLORS[names.index(group_name) % len(COLORS)]
-    return COLORS[0]
 
 # ── Initialize session state ──────────────────────────────────────────────────
 
@@ -155,12 +142,11 @@ if "show_grouping_modal" not in st.session_state:
 if "show_info_modal" not in st.session_state:
     st.session_state.show_info_modal = False
 
-# Current sheet -> group mapping, computed once per run so both the sidebar
-# (group-creation tree) and the main plot use the exact same, up-to-date view.
-sheet_to_group = {}
-for _group_name, _member_ids in st.session_state.groupings.items():
-    for _full_id in _member_ids:
-        sheet_to_group[_full_id] = _group_name
+if "group_colors" not in st.session_state:
+    st.session_state.group_colors = {}
+
+if "export_markers" not in st.session_state:
+    st.session_state.export_markers = True  # group_name -> color
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -185,18 +171,15 @@ with st.sidebar:
             if file_id not in st.session_state.loaded_files:
                 sheets_dict = load_xlsx(file_obj.read())
                 
-                # Date/time comes from row 2, column A of the first valid buffer sheet
-                if sheets_dict:
-                    first_sheet_key = list(sheets_dict.keys())[0]
-                    file_date_str = sheets_dict[first_sheet_key].get("date_str") or "No date available"
-                else:
-                    file_date_str = "No date available"
+                # Extract date from file
+                file_obj.seek(0)
+                display_date = extract_date_from_file(file_obj.read())
                 
                 st.session_state.loaded_files[file_id] = {
                     "name": file_obj.name,
                     "sheets": list(sheets_dict.keys()),
                     "sheets_dict": sheets_dict,
-                    "date_str": file_date_str,
+                    "mod_time": display_date,
                 }
                 
                 for sheet_key in sheets_dict.keys():
@@ -223,6 +206,8 @@ with st.sidebar:
                         del st.session_state.groupings[group_name]
                         if group_name in st.session_state.group_names_editable:
                             del st.session_state.group_names_editable[group_name]
+                        if group_name in st.session_state.group_colors:
+                            del st.session_state.group_colors[group_name]
         
         del st.session_state.loaded_files[file_id]
     
@@ -261,8 +246,7 @@ with st.sidebar:
     show_sigma_map = {}
     
     for file_id, file_data in st.session_state.loaded_files.items():
-        with st.expander(f"📁 {file_data['name']}", expanded=False):
-            st.caption(f"🕒 {file_data.get('date_str', 'No date available')}")
+        with st.expander(f"📁 {file_data['name']} — {file_data.get('mod_time', 'no date available')}", expanded=True):
             
             # "All ε'" and "All σ" buttons
             col_all_e, col_all_s = st.columns(2)
@@ -351,44 +335,23 @@ with st.sidebar:
     if st.session_state.loaded_files:
         st.divider()
     
-    # Analysis options
-    st.markdown("**Analysis**")
-    
-    show_average_and_bands = st.checkbox(
-        "Average Selected Data & Show Error Bands (±SD)",
-        value=st.session_state.show_average_and_bands,
-        key="show_average_and_bands",
-        help="When ON: calculates mean and SD across all selected sheets. When OFF: shows individual sheets."
-    )
-    
-    if selected_keys:
-        st.divider()
-    
     # Grouping system
     st.markdown("**Replicate Groups**")
     
-    if st.button("➕ New Group", use_container_width=True):
-        # Clear any leftover selections/name from a previous group-creation
-        # session so the modal always starts fresh (this was silently
-        # overwriting earlier groups when a stale name was reused).
-        for _k in list(st.session_state.keys()):
-            if _k.startswith("gselect_") or _k == "new_group_name":
-                del st.session_state[_k]
-        st.session_state.show_grouping_modal = True
+    col_group, col_help = st.columns([1, 1])
+    with col_group:
+        if st.button("➕ New Group", use_container_width=True):
+            st.session_state.show_grouping_modal = not st.session_state.show_grouping_modal
+    
+    with col_help:
+        if st.button("ℹ️ Help", use_container_width=True):
+            st.session_state.show_info_modal = not st.session_state.show_info_modal
     
     if st.session_state.groupings:
         st.caption("Groups:")
         for group_name in list(st.session_state.groupings.keys()):
             member_ids = st.session_state.groupings[group_name]
             member_names = [display_names.get(fid, fid.split("|")[1]) for fid in member_ids]
-            group_color = get_group_color(group_name)
-            
-            st.markdown(
-                f"<div style='display:flex;align-items:center;gap:6px;margin-top:4px'>"
-                f"<span style='display:inline-block;width:9px;height:9px;border-radius:50%;"
-                f"background:{group_color};flex-shrink:0'></span>"
-                f"<span style='font-size:10px;color:#888'>group color</span></div>",
-                unsafe_allow_html=True)
             
             col_gname, col_gedit = st.columns([3, 0.5])
             
@@ -411,6 +374,8 @@ with st.sidebar:
                     del st.session_state.groupings[group_name]
                     if group_name in st.session_state.group_names_editable:
                         del st.session_state.group_names_editable[group_name]
+                    if group_name in st.session_state.group_colors:
+                        del st.session_state.group_colors[group_name]
                     st.rerun()
             
             st.caption(f"{', '.join(member_names)}")
@@ -424,64 +389,50 @@ with st.sidebar:
         group_name_input = st.text_input("Group name", placeholder="e.g., 'Buffer 1 replicates'", key="new_group_name")
         
         st.markdown("Select sheets:")
-        st.caption("Sheets already in another group aren't listed — remove them from that group first if you need to move them.")
         selected_for_group = {}
         
-        assignable_full_ids = [fid for fid in selected_keys if fid not in sheet_to_group]
-        
-        for full_id in assignable_full_ids:
-            if f"gselect_{full_id}" not in st.session_state:
-                st.session_state[f"gselect_{full_id}"] = False
-        
-        def make_select_all_file_cb(fid, file_keys):
-            def _cb():
-                val = st.session_state.get(f"gselect_all_{fid}", False)
-                for fk in file_keys:
-                    st.session_state[f"gselect_{fk}"] = val
-            return _cb
-        
+        # Tree structure: group by file
         for file_id, file_data in st.session_state.loaded_files.items():
-            file_keys = [f"{file_id}|{sk}" for sk in file_data["sheets"] if f"{file_id}|{sk}" in assignable_full_ids]
-            if not file_keys:
-                continue
-            
-            with st.expander(f"📁 {file_data['name']}", expanded=False):
-                if f"gselect_all_{file_id}" not in st.session_state:
-                    st.session_state[f"gselect_all_{file_id}"] = False
+            with st.expander(f"📁 {file_data['name']}", expanded=True):
                 
-                st.checkbox("Select all buffers in this file", key=f"gselect_all_{file_id}",
-                           on_change=make_select_all_file_cb(file_id, file_keys))
+                # Select all for this file
+                if st.checkbox(f"Select all from {file_data['name']}", key=f"select_all_group_{file_id}"):
+                    for sheet_key in file_data["sheets"]:
+                        full_id = f"{file_id}|{sheet_key}"
+                        if full_id in selected_keys:
+                            selected_for_group[full_id] = True
                 
-                for full_id in file_keys:
-                    display_name = display_names.get(full_id, full_id)
-                    col_indent, col_check = st.columns([0.3, 3])
-                    with col_check:
+                # Individual sheet checkboxes
+                for sheet_key in file_data["sheets"]:
+                    full_id = f"{file_id}|{sheet_key}"
+                    if full_id in selected_keys:
+                        display_name = display_names.get(full_id, sheet_key)
                         selected_for_group[full_id] = st.checkbox(
-                            display_name, key=f"gselect_{full_id}")
+                            display_name, 
+                            key=f"gselect_{full_id}",
+                            value=False  # Reset to False each time modal opens
+                        )
         
         col_create, col_cancel = st.columns(2)
         with col_create:
             if st.button("Create", use_container_width=True):
-                if not group_name_input or not any(selected_for_group.values()):
-                    st.error("Enter group name and select sheets")
-                elif group_name_input in st.session_state.groupings:
-                    st.error(f"A group named '{group_name_input}' already exists — choose a different name.")
-                else:
+                if group_name_input and any(selected_for_group.values()):
                     members = [fid for fid, selected in selected_for_group.items() if selected]
                     st.session_state.groupings[group_name_input] = members
                     st.session_state.group_names_editable[group_name_input] = group_name_input
+                    
+                    # Assign color to group
+                    color_idx = len(st.session_state.group_colors) % len(COLORS)
+                    st.session_state.group_colors[group_name_input] = COLORS[color_idx]
+                    
                     st.session_state.show_grouping_modal = False
-                    for _k in list(st.session_state.keys()):
-                        if _k.startswith("gselect_") or _k == "new_group_name":
-                            del st.session_state[_k]
                     st.rerun()
+                else:
+                    st.error("Enter group name and select sheets")
         
         with col_cancel:
             if st.button("Cancel", use_container_width=True):
                 st.session_state.show_grouping_modal = False
-                for _k in list(st.session_state.keys()):
-                    if _k.startswith("gselect_") or _k == "new_group_name":
-                        del st.session_state[_k]
                 st.rerun()
     
     # Info modal
@@ -495,15 +446,10 @@ with st.sidebar:
 - Create groups to average specific subsets of sheets
 - Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
 - Grouped sheets don't appear individually on the plot
-- Each group gets its own distinct color in the legend
-
-**Average & Error Bands**
-- Global toggle: average ALL selected sheets
-- Shows ±1 standard deviation as shaded region
 
 **Error Bands (±SD)**
 - Auto-shown for replicate groups
-- Shows uncertainty in the averaged data
+- Shows ±1 standard deviation as shaded region
 
 **Legend**
 - Customize names and reorder traces
@@ -512,14 +458,7 @@ with st.sidebar:
 **Frequency Markers**
 - Enter comma-separated frequencies to interpolate values
 - Results shown in table below plot
-
-**File Info**
-- Date/time is read from row 2, column A of the first buffer in each file
             """)
-        
-        if st.button("Close Help", use_container_width=True):
-            st.session_state.show_info_modal = False
-            st.rerun()
     
     if selected_keys:
         st.divider()
@@ -629,8 +568,14 @@ y2_lo = parse_lim(y2min); y2_hi = parse_lim(y2max)
 any_eps = any(show_eps_map.get(k) for k in selected_keys)
 any_sigma = any(show_sigma_map.get(k) for k in selected_keys)
 
+# ── Build grouping info ───────────────────────────────────────────────────────
+
+sheet_to_group = {}
+for group_name, member_ids in st.session_state.groupings.items():
+    for full_id in member_ids:
+        sheet_to_group[full_id] = group_name
+
 # ── Global averaging logic ────────────────────────────────────────────────────
-# (sheet_to_group was already computed above, before the sidebar was rendered)
 
 global_stats = None
 if show_average_and_bands and selected_keys:
@@ -764,18 +709,22 @@ if show_average_and_bands and global_stats:
     
     if marker_freqs:
         f_eps_fn = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
+        f_eps_sd_fn = interp1d(stats["freq"], stats["eps_sd"], kind="cubic", fill_value="extrapolate")
         f_sigma_fn = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
+        f_sigma_sd_fn = interp1d(stats["freq"], stats["sigma_sd"], kind="cubic", fill_value="extrapolate")
         
         valid_mf = [mf for mf in marker_freqs if stats["freq"].min() <= mf <= stats["freq"].max()]
         
         if valid_mf:
             ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
+            ep_sd_vals = [float(f_eps_sd_fn(mf)) for mf in valid_mf]
             sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+            sg_sd_vals = [float(f_sigma_sd_fn(mf)) for mf in valid_mf]
             
             if any_eps:
                 fig.add_trace(go.Scatter(
                     x=valid_mf, y=ep_vals, mode="markers",
-                    marker=dict(color=mean_color, size=9, line=dict(color="#e65100", width=2)),
+                    marker=dict(color=mean_color, size=9),
                     yaxis="y1", showlegend=False,
                     hovertemplate=f"<b>ε' (mean)</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
                 ))
@@ -783,16 +732,16 @@ if show_average_and_bands and global_stats:
             if any_sigma:
                 fig.add_trace(go.Scatter(
                     x=valid_mf, y=sg_vals, mode="markers",
-                    marker=dict(color=sigma_color, size=8, symbol="diamond",
-                               line=dict(color="#e65100", width=2)),
+                    marker=dict(color=sigma_color, size=8, symbol="diamond"),
                     yaxis="y2", showlegend=False,
                     hovertemplate=f"<b>σ (mean)</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                 ))
             
-            for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+            for mf, ep_v, ep_sd, sg_v, sg_sd in zip(valid_mf, ep_vals, ep_sd_vals, sg_vals, sg_sd_vals):
                 marker_table_rows.append({
                     "Buffer": "Mean", "Freq (MHz)": mf,
-                    "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                    "ε'": round(ep_v, 4), "ε' SD": f"±{round(ep_sd, 4)}", 
+                    "σ (S/m)": round(sg_v, 6), "σ SD": f"±{round(sg_sd, 6)}",
                 })
 
 else:
@@ -810,7 +759,7 @@ else:
             stats = group_stats[group_name]
             
             display_name = st.session_state.group_names_editable.get(group_name, group_name)
-            color = get_group_color(group_name)
+            color = st.session_state.group_colors.get(group_name, COLORS[len(plotted_groups) % len(COLORS)])
             
             if any_eps:
                 fig.add_trace(go.Scatter(
@@ -874,18 +823,22 @@ else:
             
             if marker_freqs:
                 f_eps_fn = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
+                f_eps_sd_fn = interp1d(stats["freq"], stats["eps_sd"], kind="cubic", fill_value="extrapolate")
                 f_sigma_fn = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
+                f_sigma_sd_fn = interp1d(stats["freq"], stats["sigma_sd"], kind="cubic", fill_value="extrapolate")
                 
                 valid_mf = [mf for mf in marker_freqs if stats["freq"].min() <= mf <= stats["freq"].max()]
                 
                 if valid_mf:
                     ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
+                    ep_sd_vals = [float(f_eps_sd_fn(mf)) for mf in valid_mf]
                     sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+                    sg_sd_vals = [float(f_sigma_sd_fn(mf)) for mf in valid_mf]
                     
                     if any_eps:
                         fig.add_trace(go.Scatter(
                             x=valid_mf, y=ep_vals, mode="markers",
-                            marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
+                            marker=dict(color=color, size=9),
                             yaxis="y1", showlegend=False,
                             hovertemplate=f"<b>{display_name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
                         ))
@@ -893,16 +846,16 @@ else:
                     if any_sigma:
                         fig.add_trace(go.Scatter(
                             x=valid_mf, y=sg_vals, mode="markers",
-                            marker=dict(color=color, size=8, symbol="diamond",
-                                       line=dict(color="#e65100", width=2)),
+                            marker=dict(color=color, size=8, symbol="diamond"),
                             yaxis="y2", showlegend=False,
                             hovertemplate=f"<b>{display_name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                         ))
                     
-                    for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+                    for mf, ep_v, ep_sd, sg_v, sg_sd in zip(valid_mf, ep_vals, ep_sd_vals, sg_vals, sg_sd_vals):
                         marker_table_rows.append({
                             "Buffer": display_name, "Freq (MHz)": mf,
-                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                            "ε'": round(ep_v, 4), "ε' SD": f"±{round(ep_sd, 4)}", 
+                            "σ (S/m)": round(sg_v, 6), "σ SD": f"±{round(sg_sd, 6)}",
                         })
         
         else:
@@ -953,7 +906,7 @@ else:
                     if show_eps_map.get(k):
                         fig.add_trace(go.Scatter(
                             x=valid_mf, y=ep_vals, mode="markers",
-                            marker=dict(color=color, size=9, line=dict(color="#e65100", width=2)),
+                            marker=dict(color=color, size=9),
                             yaxis="y1", showlegend=False,
                             hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>ε': %{{y:.4f}}<extra></extra>"
                         ))
@@ -961,8 +914,7 @@ else:
                     if show_sigma_map.get(k):
                         fig.add_trace(go.Scatter(
                             x=valid_mf, y=sg_vals, mode="markers",
-                            marker=dict(color=color, size=8, symbol="diamond",
-                                       line=dict(color="#e65100", width=2)),
+                            marker=dict(color=color, size=8, symbol="diamond"),
                             yaxis="y2", showlegend=False,
                             hovertemplate=f"<b>{name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                         ))
@@ -970,7 +922,8 @@ else:
                     for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
                         marker_table_rows.append({
                             "Buffer": name, "Freq (MHz)": mf,
-                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                            "ε'": round(ep_v, 4), "ε' SD": "—", 
+                            "σ (S/m)": round(sg_v, 6), "σ SD": "—",
                         })
 
 if not any_eps and any_sigma:
@@ -1054,9 +1007,7 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
                     marker_freqs, eps_hlines, sigma_hlines,
                     any_eps, any_sigma, plot_title,
                     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi,
-                    global_stats, show_average_and_bands, sheet_to_group, group_stats, group_names_editable):
-    
-    group_name_list = list(st_session.groupings.keys())
+                    global_stats, show_average_and_bands, sheet_to_group, group_stats, group_names_editable, group_colors):
     
     fig_ex, ax1_ex = plt.subplots(figsize=(12, 6), facecolor="white")
     fig_ex.subplots_adjust(left=0.09, right=0.88, top=0.92, bottom=0.10)
@@ -1118,9 +1069,8 @@ def build_export_png(selected_keys, st_session, legend_names, display_names,
                 plotted_groups.add(group_name)
                 stats = group_stats[group_name]
                 
-                color = COLORS[group_name_list.index(group_name) % len(COLORS)] if group_name in group_name_list else COLORS[0]
-                
                 display_name = group_names_editable.get(group_name, group_name)
+                color = group_colors.get(group_name, COLORS[len(plotted_groups) % len(COLORS)])
                 
                 if any_eps:
                     ax1_ex.plot(stats["freq"], stats["eps_mean"], color=color, linewidth=1.8)
@@ -1190,7 +1140,7 @@ png_bytes = build_export_png(
     marker_freqs, eps_hlines, sigma_hlines,
     any_eps, any_sigma, plot_title,
     x_lo, x_hi, y1_lo, y1_hi, y2_lo, y2_hi,
-    global_stats, show_average_and_bands, sheet_to_group, group_stats, st.session_state.group_names_editable)
+    global_stats, show_average_and_bands, sheet_to_group, group_stats, st.session_state.group_names_editable, st.session_state.group_colors)
 
 st.download_button("💾 Export Plot as PNG", data=png_bytes,
                   file_name=plot_title+".png", mime="image/png")
@@ -1207,7 +1157,6 @@ if st.session_state.show_info_modal:
 - Create groups to average specific subsets of sheets
 - Example: "Buffer 1 replicates" (3 sheets) → shows as 1 mean line
 - Grouped sheets don't appear individually on the plot
-- Each group gets its own distinct color in the legend
 
 **Average & Error Bands**
 - Global toggle: average ALL selected sheets
@@ -1226,7 +1175,7 @@ if st.session_state.show_info_modal:
 - Results shown in table below plot
 
 **File Info**
-- Date/time is read from row 2, column A of the first buffer in each file
+- Shows last modified time in file header
         """)
 
 if marker_table_rows:
