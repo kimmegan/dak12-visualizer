@@ -92,6 +92,14 @@ def parse_lim(v):
     except Exception:
         return None
 
+def parse_list(s):
+    vals = []
+    for part in s.split(","):
+        v = parse_lim(part)
+        if v is not None:
+            vals.append(v)
+    return vals
+
 def extract_date_from_file(file_bytes):
     """Extract date from row 2, column A of first sheet"""
     try:
