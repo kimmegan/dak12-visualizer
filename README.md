@@ -6,7 +6,6 @@ A web app for visualizing dielectric measurements from the DAK-12 probe system.
 - Upload multi-sheet DAK-12 XLSX files
 - Select/deselect individual buffers to plot
 - Dual Y-axis: Permittivity (ε') on left, Conductivity (σ) on right
-- Interactive hover tooltips
 - Frequency marker tool with interpolated values
 - Adjustable axis limits
 - Export plot as PNG
