@@ -765,12 +765,16 @@ if show_average_and_bands and global_stats:
     if marker_freqs:
         f_eps_fn = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
         f_sigma_fn = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
+        f_eps_sd_fn = interp1d(stats["freq"], stats["eps_sd"], kind="cubic", fill_value="extrapolate")
+        f_sigma_sd_fn = interp1d(stats["freq"], stats["sigma_sd"], kind="cubic", fill_value="extrapolate")
         
         valid_mf = [mf for mf in marker_freqs if stats["freq"].min() <= mf <= stats["freq"].max()]
         
         if valid_mf:
             ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
             sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+            ep_sd_vals = [float(f_eps_sd_fn(mf)) for mf in valid_mf]
+            sg_sd_vals = [float(f_sigma_sd_fn(mf)) for mf in valid_mf]
             
             if any_eps:
                 fig.add_trace(go.Scatter(
@@ -789,10 +793,11 @@ if show_average_and_bands and global_stats:
                     hovertemplate=f"<b>σ (mean)</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                 ))
             
-            for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+            for mf, ep_v, sg_v, ep_sd_v, sg_sd_v in zip(valid_mf, ep_vals, sg_vals, ep_sd_vals, sg_sd_vals):
                 marker_table_rows.append({
-                    "Buffer": "Mean", "Freq (MHz)": mf,
-                    "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                    "Buffer": "Mean (all selected)", "Freq (MHz)": mf,
+                    "ε'": round(ep_v, 4), "ε' SD": round(ep_sd_v, 4),
+                    "σ (S/m)": round(sg_v, 6), "σ SD": round(sg_sd_v, 6),
                 })
 
 else:
@@ -875,12 +880,16 @@ else:
             if marker_freqs:
                 f_eps_fn = interp1d(stats["freq"], stats["eps_mean"], kind="cubic", fill_value="extrapolate")
                 f_sigma_fn = interp1d(stats["freq"], stats["sigma_mean"], kind="cubic", fill_value="extrapolate")
+                f_eps_sd_fn = interp1d(stats["freq"], stats["eps_sd"], kind="cubic", fill_value="extrapolate")
+                f_sigma_sd_fn = interp1d(stats["freq"], stats["sigma_sd"], kind="cubic", fill_value="extrapolate")
                 
                 valid_mf = [mf for mf in marker_freqs if stats["freq"].min() <= mf <= stats["freq"].max()]
                 
                 if valid_mf:
                     ep_vals = [float(f_eps_fn(mf)) for mf in valid_mf]
                     sg_vals = [float(f_sigma_fn(mf)) for mf in valid_mf]
+                    ep_sd_vals = [float(f_eps_sd_fn(mf)) for mf in valid_mf]
+                    sg_sd_vals = [float(f_sigma_sd_fn(mf)) for mf in valid_mf]
                     
                     if any_eps:
                         fig.add_trace(go.Scatter(
@@ -899,10 +908,11 @@ else:
                             hovertemplate=f"<b>{display_name}</b><br>Freq: %{{x}} MHz<br>σ: %{{y:.6f}} S/m<extra></extra>"
                         ))
                     
-                    for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
+                    for mf, ep_v, sg_v, ep_sd_v, sg_sd_v in zip(valid_mf, ep_vals, sg_vals, ep_sd_vals, sg_sd_vals):
                         marker_table_rows.append({
                             "Buffer": display_name, "Freq (MHz)": mf,
-                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                            "ε'": round(ep_v, 4), "ε' SD": round(ep_sd_v, 4),
+                            "σ (S/m)": round(sg_v, 6), "σ SD": round(sg_sd_v, 6),
                         })
         
         else:
@@ -970,7 +980,8 @@ else:
                     for mf, ep_v, sg_v in zip(valid_mf, ep_vals, sg_vals):
                         marker_table_rows.append({
                             "Buffer": name, "Freq (MHz)": mf,
-                            "ε'": round(ep_v, 4), "σ (S/m)": round(sg_v, 6),
+                            "ε'": round(ep_v, 4), "ε' SD": "N/A",
+                            "σ (S/m)": round(sg_v, 6), "σ SD": "N/A",
                         })
 
 if not any_eps and any_sigma:
@@ -1232,4 +1243,12 @@ if st.session_state.show_info_modal:
 if marker_table_rows:
     st.divider()
     st.markdown("**Interpolated Values at Marked Frequencies**")
-    st.dataframe(pd.DataFrame(marker_table_rows), use_container_width=True, hide_index=True)
+    st.caption("ε' SD / σ SD are only available for replicate groups and the global average (they need multiple sheets to compute a spread). Individual, ungrouped sheets show N/A.")
+    
+    marker_df = pd.DataFrame(marker_table_rows)
+    st.dataframe(marker_df, use_container_width=True, hide_index=True)
+    
+    with st.expander("📋 Copy as table (tab-separated — paste into Excel/Sheets/Docs)"):
+        tsv_text = marker_df.to_csv(sep="\t", index=False)
+        st.code(tsv_text, language=None)
+        st.caption("Hover the block above and click the copy icon in its top-right corner, then paste directly into a spreadsheet.")
