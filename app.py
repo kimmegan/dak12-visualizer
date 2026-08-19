@@ -12,6 +12,12 @@ import hashlib
 import os
 from datetime import datetime
 
+try:
+    from streamlit_sortables import sort_items
+    _SORTABLES_AVAILABLE = True
+except ImportError:
+    _SORTABLES_AVAILABLE = False
+
 st.set_page_config(page_title="DAK-12 Visualizer", layout="wide", page_icon="🔬")
 
 st.markdown("""
@@ -507,7 +513,7 @@ with st.sidebar:
 
 **Legend**
 - Customize names and reorder traces
-- Use ▲ and ▼ buttons
+- Drag rows to reorder (also sets draw order)
 
 **Frequency Markers**
 - Enter comma-separated frequencies to interpolate values
@@ -527,46 +533,81 @@ with st.sidebar:
     # Legend names + order
     st.markdown("**Legend Names & Order**")
     
-    def move_up(full_id):
-        order = st.session_state["legend_order"]
-        i = order.index(full_id)
-        if i > 0:
-            order[i], order[i-1] = order[i-1], order[i]
-    
-    def move_down(full_id):
-        order = st.session_state["legend_order"]
-        i = order.index(full_id)
-        if i < len(order) - 1:
-            order[i], order[i+1] = order[i+1], order[i]
-    
     legend_names = {}
     for full_id in selected_keys:
-        row = st.columns([3.2, 0.45, 0.45])
-        
         display_name = display_names.get(full_id, full_id)
-        
-        with row[0]:
-            legend_names[full_id] = st.text_input(
-                full_id, value=display_name,
-                key=f"leg_{full_id}", label_visibility="collapsed")
-        
-        with row[1]:
-            st.button("▲", key=f"up_{full_id}",
-                     on_click=move_up, args=(full_id,),
-                     use_container_width=True)
-        
-        with row[2]:
-            st.button("▼", key=f"dn_{full_id}",
-                     on_click=move_down, args=(full_id,),
-                     use_container_width=True)
+        legend_names[full_id] = st.text_input(
+            full_id, value=display_name,
+            key=f"leg_{full_id}", label_visibility="collapsed")
     
     for full_id in st.session_state.legend_order:
         if full_id not in legend_names:
             display_name = display_names.get(full_id, full_id)
             legend_names[full_id] = display_name
     
-    ordered_keys = st.session_state.legend_order
-    selected_keys = [k for k in ordered_keys if k in selected_keys]
+    if selected_keys:
+        if _SORTABLES_AVAILABLE:
+            st.caption("Drag to reorder ↕ — top-to-bottom here sets legend order, and also which "
+                       "trace draws in front (bottom of the list draws on top).")
+            
+            # Build unique, human-readable labels for the drag-and-drop widget.
+            # Zero-width spaces disambiguate any duplicate custom names so the
+            # component (which requires unique strings) never collapses two
+            # different sheets into one draggable row.
+            label_to_id = {}
+            sortable_items = []
+            for full_id in selected_keys:
+                base_label = legend_names.get(full_id, full_id) or full_id
+                label = base_label
+                dup = 1
+                while label in label_to_id:
+                    dup += 1
+                    label = base_label + ("\u200b" * dup)
+                label_to_id[label] = full_id
+                sortable_items.append(label)
+            
+            # Re-mount the widget whenever the *set* of selected sheets changes
+            # (adding/removing a trace) so it always reflects reality; a stable
+            # key otherwise preserves drag state across reruns.
+            sortable_key = "legend_sort_" + hashlib.md5(
+                "|".join(sorted(selected_keys)).encode()).hexdigest()[:10]
+            
+            new_order_labels = sort_items(
+                sortable_items,
+                direction="vertical",
+                key=sortable_key,
+                custom_style="""
+                    .sortable-item {
+                        padding: 6px 10px;
+                        margin-bottom: 4px;
+                        font-size: 12px;
+                        border-radius: 6px;
+                        cursor: grab;
+                    }
+                """,
+            )
+            
+            new_selected_order = [label_to_id[l] for l in new_order_labels if l in label_to_id]
+            
+            if new_selected_order and new_selected_order != selected_keys:
+                old_order = st.session_state.legend_order
+                first_idx = min(
+                    (old_order.index(fid) for fid in selected_keys if fid in old_order),
+                    default=0,
+                )
+                before = old_order[:first_idx]
+                after_unselected = [fid for fid in old_order[first_idx:] if fid not in selected_keys]
+                st.session_state.legend_order = before + new_selected_order + after_unselected
+            
+            selected_keys = new_selected_order or selected_keys
+        else:
+            st.warning(
+                "Drag-and-drop reordering needs the `streamlit-sortables` package. "
+                "Install it with `pip install streamlit-sortables` and rerun the app.",
+                icon="⚠️",
+            )
+            ordered_keys = st.session_state.legend_order
+            selected_keys = [k for k in ordered_keys if k in selected_keys]
     
     if selected_keys:
         st.divider()
@@ -1230,7 +1271,7 @@ if st.session_state.show_info_modal:
 
 **Legend**
 - Customize names and reorder traces
-- Use ▲ and ▼ buttons
+- Drag rows to reorder (also sets draw order)
 
 **Frequency Markers**
 - Enter comma-separated frequencies to interpolate values
