@@ -873,7 +873,12 @@ else:
     # Show individual sheets (not in groups) and groups as means
     plotted_groups = set()
     
-    for k in selected_keys:
+    # Plotly renders the legend in the reverse of trace-add order, so we add
+    # traces bottom-of-list first / top-of-list last. This makes the sidebar's
+    # top-to-bottom order match the chart legend's top-to-bottom order, and
+    # since z-order follows trace-add order too, the top sidebar item also
+    # ends up drawn in front (on top of the other lines).
+    for k in reversed(selected_keys):
         # If this sheet is in a group, plot the group instead
         if k in sheet_to_group:
             group_name = sheet_to_group[k]
