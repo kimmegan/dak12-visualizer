@@ -12,11 +12,7 @@ import hashlib
 import os
 from datetime import datetime
 
-try:
-    from streamlit_sortables import sort_items
-    _SORTABLES_AVAILABLE = True
-except ImportError:
-    _SORTABLES_AVAILABLE = False
+
 
 st.set_page_config(page_title="DAK-12 Visualizer", layout="wide", page_icon="🔬")
 
@@ -513,7 +509,7 @@ with st.sidebar:
 
 **Legend**
 - Customize names and reorder traces
-- Drag rows to reorder (also sets draw order)
+- ▲/▼ to reorder — moving a group moves all its members together
 
 **Frequency Markers**
 - Enter comma-separated frequencies to interpolate values
@@ -533,8 +529,13 @@ with st.sidebar:
     # Legend names + order
     st.markdown("**Legend Names & Order**")
     
+    # Rename inputs — only for ungrouped sheets. A sheet that's in a replicate
+    # group is plotted (and named) as part of that group, so its name is
+    # edited once, up in the "Replicate Groups" section, not per-sheet here.
     legend_names = {}
     for full_id in selected_keys:
+        if full_id in sheet_to_group:
+            continue
         display_name = display_names.get(full_id, full_id)
         legend_names[full_id] = st.text_input(
             full_id, value=display_name,
@@ -542,72 +543,99 @@ with st.sidebar:
     
     for full_id in st.session_state.legend_order:
         if full_id not in legend_names:
-            display_name = display_names.get(full_id, full_id)
-            legend_names[full_id] = display_name
+            legend_names[full_id] = display_names.get(full_id, full_id)
     
-    if selected_keys:
-        if _SORTABLES_AVAILABLE:
-            st.caption("Drag to reorder ↕ — top-to-bottom here sets legend order, and also which "
-                       "trace draws in front (bottom of the list draws on top).")
-            
-            # Build unique, human-readable labels for the drag-and-drop widget.
-            # Zero-width spaces disambiguate any duplicate custom names so the
-            # component (which requires unique strings) never collapses two
-            # different sheets into one draggable row.
-            label_to_id = {}
-            sortable_items = []
-            for full_id in selected_keys:
-                base_label = legend_names.get(full_id, full_id) or full_id
-                label = base_label
-                dup = 1
-                while label in label_to_id:
-                    dup += 1
-                    label = base_label + ("\u200b" * dup)
-                label_to_id[label] = full_id
-                sortable_items.append(label)
-            
-            # Re-mount the widget whenever the *set* of selected sheets changes
-            # (adding/removing a trace) so it always reflects reality; a stable
-            # key otherwise preserves drag state across reruns.
-            sortable_key = "legend_sort_" + hashlib.md5(
-                "|".join(sorted(selected_keys)).encode()).hexdigest()[:10]
-            
-            new_order_labels = sort_items(
-                sortable_items,
-                direction="vertical",
-                key=sortable_key,
-                custom_style="""
-                    .sortable-item {
-                        padding: 6px 10px;
-                        margin-bottom: 4px;
-                        font-size: 12px;
-                        border-radius: 6px;
-                        cursor: grab;
-                    }
-                """,
-            )
-            
-            new_selected_order = [label_to_id[l] for l in new_order_labels if l in label_to_id]
-            
-            if new_selected_order and new_selected_order != selected_keys:
-                old_order = st.session_state.legend_order
-                first_idx = min(
-                    (old_order.index(fid) for fid in selected_keys if fid in old_order),
-                    default=0,
-                )
-                before = old_order[:first_idx]
-                after_unselected = [fid for fid in old_order[first_idx:] if fid not in selected_keys]
-                st.session_state.legend_order = before + new_selected_order + after_unselected
-            
-            selected_keys = new_selected_order or selected_keys
-        else:
-            st.warning(
-                "Drag-and-drop reordering needs the `streamlit-sortables` package. "
-                "Install it with `pip install streamlit-sortables` and rerun the app.",
-                icon="⚠️",
-            )
-            ordered_keys = st.session_state.legend_order
-            selected_keys = [k for k in ordered_keys if k in selected_keys]
+    # Ordering happens at the "unit" level: a unit is either one ungrouped
+    # sheet, or one whole replicate group (all its members move together).
+    # This is what actually lines up with what's drawn on the plot — a group
+    # is a single trace, so it should be a single reorderable row.
+    def _unit_of(full_id):
+        return sheet_to_group.get(full_id, full_id)
+    
+    def _unique_units(order_list):
+        seen = set()
+        units = []
+        for fid in order_list:
+            u = _unit_of(fid)
+            if u not in seen:
+                seen.add(u)
+                units.append(u)
+        return units
+    
+    def _unit_label(u):
+        if u in st.session_state.groupings:
+            gname = st.session_state.group_names_editable.get(u, u)
+            return f"🔗 {gname} (group)"
+        return legend_names.get(u, display_names.get(u, u))
+    
+    def _apply_unit_order(new_unit_order):
+        old_order = st.session_state.legend_order
+        unit_members = {}
+        for fid in old_order:
+            u = _unit_of(fid)
+            unit_members.setdefault(u, []).append(fid)
+        
+        moved_full_ids = set()
+        for u in new_unit_order:
+            moved_full_ids.update(unit_members.get(u, []))
+        
+        first_idx = min(
+            (old_order.index(fid) for fid in moved_full_ids if fid in old_order),
+            default=0,
+        )
+        before = old_order[:first_idx]
+        after_unselected = [fid for fid in old_order[first_idx:] if fid not in moved_full_ids]
+        
+        new_full_order = list(before)
+        for u in new_unit_order:
+            new_full_order.extend(unit_members.get(u, []))
+        new_full_order.extend(after_unselected)
+        
+        st.session_state.legend_order = new_full_order
+    
+    def _move_unit(direction, unit):
+        order_now = _unique_units(st.session_state.legend_order)
+        sel_now = set(_unit_of(fid) for fid in selected_keys)
+        sel_units_now = [u for u in order_now if u in sel_now]
+        if unit not in sel_units_now:
+            return
+        i = sel_units_now.index(unit)
+        j = i - 1 if direction == "up" else i + 1
+        if j < 0 or j >= len(sel_units_now):
+            return
+        sel_units_now[i], sel_units_now[j] = sel_units_now[j], sel_units_now[i]
+        _apply_unit_order(sel_units_now)
+    
+    all_units_ordered = _unique_units(st.session_state.legend_order)
+    selected_unit_ids = set(_unit_of(fid) for fid in selected_keys)
+    selected_units = [u for u in all_units_ordered if u in selected_unit_ids]
+    
+    if selected_units:
+        st.caption("▲/▼ move a row — for groups, all members move together. "
+                   "Order here sets both legend order and which trace draws on top "
+                   "(lower rows draw in front).")
+    
+    for u in selected_units:
+        row = st.columns([3.2, 0.45, 0.45])
+        
+        with row[0]:
+            st.markdown(
+                f"<div style='font-size:12px;padding-top:6px;white-space:nowrap;"
+                f"overflow:hidden;text-overflow:ellipsis'>{_unit_label(u)}</div>",
+                unsafe_allow_html=True)
+        
+        with row[1]:
+            st.button("▲", key=f"up_unit_{u}",
+                     on_click=_move_unit, args=("up", u),
+                     use_container_width=True)
+        
+        with row[2]:
+            st.button("▼", key=f"dn_unit_{u}",
+                     on_click=_move_unit, args=("down", u),
+                     use_container_width=True)
+    
+    ordered_keys = st.session_state.legend_order
+    selected_keys = [k for k in ordered_keys if k in selected_keys]
     
     if selected_keys:
         st.divider()
@@ -1271,7 +1299,7 @@ if st.session_state.show_info_modal:
 
 **Legend**
 - Customize names and reorder traces
-- Drag rows to reorder (also sets draw order)
+- ▲/▼ to reorder — moving a group moves all its members together
 
 **Frequency Markers**
 - Enter comma-separated frequencies to interpolate values
